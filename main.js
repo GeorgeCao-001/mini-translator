@@ -1,4 +1,6 @@
-// Mini Translator v3.0.9 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.10 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.10：进度/token/ETA 实时更新——token 一发出即计入（含在途），加 600ms 心跳
+//         在批次在途期间持续推送，不再等一批完成才刷新
 // v3.0.9：合并冗余 worker 文件——只保留 pdf.worker.js 一份（blob URL 主路径与
 //         pdf.js 内部 fake-worker 兜底共用），删除内容重复的 pdf.worker.min.js
 // v3.0.8：取消翻译时自动删除本次生成的产物（Markdown / HTML / 页图目录），保持 vault 干净
@@ -988,6 +990,7 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
   let done = 0;
   let doneChars = 0;
   let finishedBatches = 0;
+  let inFlightChars = 0; // 在途请求已发送的字符（token 已实际消耗，实时计入）
   const tick = () => {
     onProg &&
       onProg({
@@ -999,9 +1002,12 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
         done,
         total: blocks.length,
         batches: batches.length,
-        tokDone: estTokens(doneChars),
+        // 实时：已完成 + 在途一起算，token 一发出就计入，不等一批完成
+        tokDone: estTokens(doneChars + inFlightChars),
       });
   };
+  // 实时心跳：批次在途期间也持续推送，token 消耗 / ETA 不再等一批完成才刷新
+  const heart = setInterval(tick, 600);
   const runBatch = async (bat) => {
     const need = [];
     const idx = [];
@@ -1022,6 +1028,8 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
       tick();
       return;
     }
+    // 发起请求：该批 token 即刻消耗，实时计入（请求发出即已花出去）
+    inFlightChars += need.reduce((n, t) => n + t.length, 0);
     tick();
     let got = null;
     try {
@@ -1048,6 +1056,7 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
         }
       }
     }
+    inFlightChars -= need.reduce((n, t) => n + t.length, 0);
     idx.forEach((gi, k) => {
       const rec = { en: got[k]?.en || "", zh: got[k]?.zh || "" };
       results[gi] = rec;
@@ -1066,12 +1075,16 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
       await runBatch(batches[i]);
     }
   };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(FULL_CONCURRENCY, batches.length) },
-      () => worker()
-    )
-  );
+  try {
+    await Promise.all(
+      Array.from(
+        { length: Math.min(FULL_CONCURRENCY, batches.length) },
+        () => worker()
+      )
+    );
+  } finally {
+    clearInterval(heart);
+  }
   return { results, batches };
 }
 
