@@ -1,4 +1,6 @@
-// Mini Translator v3.0.8 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.9 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.9：合并冗余 worker 文件——只保留 pdf.worker.js 一份（blob URL 主路径与
+//         pdf.js 内部 fake-worker 兜底共用），删除内容重复的 pdf.worker.min.js
 // v3.0.8：取消翻译时自动删除本次生成的产物（Markdown / HTML / 页图目录），保持 vault 干净
 // v3.0.7：进度条以 1% 为步长匀速推进——update() 不再直接拽显示位置，位置只由
 //         tick() 每帧最多 +1% 爬向目标（目标 = 整体速率×时长，夹在真实进度与 +8% 之间）
@@ -790,7 +792,8 @@ function fmtHistTime(ts) {
 // 关键坑：Obsidian 插件里 require('./相对路径') 锚在应用根而非插件目录，必须显式构造绝对路径。
 // 依次尝试 __dirname（若环境提供且指向插件目录）→ vault basePath + manifest.dir → 相对路径（Node 测试）。
 // worker 读本地文件建 blob URL，绕开 app:// 协议下 new Worker 被拒/CSP 拦截；
-// 目录里同时保留未压缩命名的 pdf.worker.js，让 fake-worker 的 require 兜底也能走通。
+// worker 只保留 pdf.worker.js 一份：blob URL 主路径读它，pdf.js 内部 fake-worker 兜底
+//（源码 fallbackWorkerSrc="./pdf.worker.js"）也指向它，两条路共用一个文件，不冗余。
 let PDFJS_LIB = null;
 function pluginFileCandidates(plugin, relParts) {
   const path = require("path");
@@ -822,7 +825,7 @@ function loadPdfJs(plugin) {
   if (!lib) throw new Error(`加载自带 pdf.js 失败：${err?.message || err}`);
   PDFJS_LIB = lib;
   const fs = require("fs");
-  for (const c of pluginFileCandidates(plugin, ["lib", "pdf.worker.min.js"])) {
+  for (const c of pluginFileCandidates(plugin, ["lib", "pdf.worker.js"])) {
     try {
       const code = fs.readFileSync(c, "utf8");
       PDFJS_LIB.GlobalWorkerOptions.workerSrc = URL.createObjectURL(
@@ -838,7 +841,7 @@ function loadPdfJs(plugin) {
     try {
       PDFJS_LIB.GlobalWorkerOptions.workerSrc =
         plugin.app.vault.adapter.getResourcePath(
-          plugin.manifest.dir + "/lib/pdf.worker.min.js"
+          plugin.manifest.dir + "/lib/pdf.worker.js"
         );
     } catch (e2) {
       console.warn("[mini-translator] worker 设置全部失败:", e2);

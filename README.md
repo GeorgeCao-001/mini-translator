@@ -34,7 +34,7 @@ Obsidian 零配置查词 + 翻译插件。灵感来自 Translate for Zotero：�
    ├── styles.css
    └── lib/
        ├── pdf.min.js
-       └── pdf.worker.min.js
+       └── pdf.worker.js
    ```
    （`.obsidian` 是隐藏文件夹；没有 `plugins` 目录就新建一个）
 2. 重启 Obsidian（或 Ctrl+P → Reload app）
