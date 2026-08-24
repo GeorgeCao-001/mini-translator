@@ -1,4 +1,6 @@
-// Mini Translator v3.0.10 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.11 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.11：token/ETA 流式且不虚报——撤销乐观计数，token 显示值在模态框内每 120ms
+//         向真实消耗值平滑插值（落后真实）；心跳间隔 600ms→250ms
 // v3.0.10：进度/token/ETA 实时更新——token 一发出即计入（含在途），加 600ms 心跳
 //         在批次在途期间持续推送，不再等一批完成才刷新
 // v3.0.9：合并冗余 worker 文件——只保留 pdf.worker.js 一份（blob URL 主路径与
@@ -990,7 +992,6 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
   let done = 0;
   let doneChars = 0;
   let finishedBatches = 0;
-  let inFlightChars = 0; // 在途请求已发送的字符（token 已实际消耗，实时计入）
   const tick = () => {
     onProg &&
       onProg({
@@ -1002,12 +1003,11 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
         done,
         total: blocks.length,
         batches: batches.length,
-        // 实时：已完成 + 在途一起算，token 一发出就计入，不等一批完成
-        tokDone: estTokens(doneChars + inFlightChars),
+        tokDone: estTokens(doneChars), // 真实值；模态框内平滑插值成流式
       });
   };
-  // 实时心跳：批次在途期间也持续推送，token 消耗 / ETA 不再等一批完成才刷新
-  const heart = setInterval(tick, 600);
+  // 实时心跳：批次在途期间持续推送真实进度；纯本地刷新，不发网络请求，不影响速度
+  const heart = setInterval(tick, 250);
   const runBatch = async (bat) => {
     const need = [];
     const idx = [];
@@ -1028,8 +1028,6 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
       tick();
       return;
     }
-    // 发起请求：该批 token 即刻消耗，实时计入（请求发出即已花出去）
-    inFlightChars += need.reduce((n, t) => n + t.length, 0);
     tick();
     let got = null;
     try {
@@ -1056,7 +1054,6 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
         }
       }
     }
-    inFlightChars -= need.reduce((n, t) => n + t.length, 0);
     idx.forEach((gi, k) => {
       const rec = { en: got[k]?.en || "", zh: got[k]?.zh || "" };
       results[gi] = rec;
@@ -1145,6 +1142,7 @@ class TranslateProgressModal extends Modal {
     this.rate = 0; // 整体进度速率（fraction/ms，EMA，随时间修正）
     this.t0 = 0; // 当前阶段起点
     this.animKey = ""; // 阶段标识：变化时重置显示进度
+    this.dispTok = 0; // token 消耗的平滑显示值（向真实值爬，不虚报）
     this._lastSt = null;
   }
 
@@ -1232,6 +1230,7 @@ class TranslateProgressModal extends Modal {
       this.rate = 0;
       this.real = null;
       this.t0 = 0;
+      this.dispTok = 0;
     }
     const now = Date.now();
     if (st.phase === "翻译中") {
@@ -1267,6 +1266,11 @@ class TranslateProgressModal extends Modal {
     if (goal > this.disp) {
       this.disp = Math.min(goal, this.disp + 0.01); // 1% 步长
     }
+    // token 平滑：向真实消耗值爬（落后真实、不虚报），每帧走 20% 差距
+    const rt = this._lastSt && this._lastSt.tokDone;
+    if (rt != null && rt > this.dispTok) {
+      this.dispTok += (rt - this.dispTok) * 0.2;
+    }
     this.paint();
   }
 
@@ -1277,7 +1281,7 @@ class TranslateProgressModal extends Modal {
     if (this.pctEl) this.pctEl.setText(`${pct}%`);
     const bits = [];
     if (st.total) bits.push(`${st.done}/${st.total} 块`);
-    if (st.tokDone) bits.push(`≈${fmtTok(st.tokDone)} tokens 已用`);
+    if (this.dispTok > 0) bits.push(`≈${fmtTok(this.dispTok)} tokens 已用`);
     if (this.real && this.rate > 0 && this.disp < 0.97) {
       const remMs = (1 - this.disp) / this.rate;
       bits.push(
