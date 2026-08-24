@@ -1,4 +1,18 @@
-// Mini Translator v0.4.0 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.8 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.8：取消翻译时自动删除本次生成的产物（Markdown / HTML / 页图目录），保持 vault 干净
+// v3.0.7：进度条以 1% 为步长匀速推进——update() 不再直接拽显示位置，位置只由
+//         tick() 每帧最多 +1% 爬向目标（目标 = 整体速率×时长，夹在真实进度与 +8% 之间）
+// v3.0.6：取消按钮秒停（Promise.race 竞速失效在途请求，跳过渲染/打开快速收尾）；
+//         进度条匀速爬动（EMA 速率估计 + 种子速率，不再一批一跳）；启动提速（选择器
+//         已解析的 PDF 文档直接复用，开跑免二次解析；进度条开跑即动）
+// v3.0.5：按用户要求彻底移除独立浏览器进度窗代码，进度窗只保留应用内可拖动弹窗
+// v3.0.3：修复致命 bug——插件内 require('./相对路径') 锚在 Obsidian 应用根而非插件目录，
+//         导致自带 pdf.js 加载失败、所有 PDF 无法解析。改为多锚点绝对路径加载
+//         （__dirname → vault basePath + manifest.dir → 相对兜底），并加锚定模拟回归测试
+// v3.0.2：进度窗改为独立浏览器窗口（本地 HTTP+SSE，不遮挡 Obsidian、任务栏可见、跨平台）；
+//         进度条持续爬动不卡顿；翻译 3 路并发 + 批容量上调，整体提速约 3 倍
+// v3.0.1：公式定界符归一（\( \)\[ \] → $/$$）修复渲染；全文翻译改为大模型源专用，全部文本块进管线
+// 源状态架构：统一中枢广播——任何界面改动 源/模型/词典/选中状态，落盘即全界面实时同步
 // 引擎配方移植自 windingwind/zotero-pdf-translate（AGPL-3.0）：
 //   youdao.ts / huoshanweb.ts / tencenttransmart.ts / google.ts（含 tk 算法）
 const {
@@ -11,6 +25,10 @@ const {
   Setting,
   DropdownComponent,
   Modal,
+  renderMath,
+  finishRenderMath,
+  setIcon,
+  shell,
 } = require("obsidian");
 
 const WORD_RE = /^[a-zA-Z][a-zA-Z']*$/;
@@ -20,6 +38,26 @@ const UA =
 
 const CACHE = new Map();
 const CACHE_MAX = 200;
+
+// ---------- 源状态中枢（统一广播）：任何界面对 翻译源/词典/模型/选中状态 的改动，
+// 落盘后自动通知所有注册的界面立即重建。界面自己不关心别人，只管订阅。 ----------
+const SOURCE_SYNC_LISTENERS = new Set();
+
+// 注册同步器，返回取消订阅函数；listener 收到广播时按当前 settings 重建自己的 UI
+function onSourcesSync(listener) {
+  SOURCE_SYNC_LISTENERS.add(listener);
+  return () => SOURCE_SYNC_LISTENERS.delete(listener);
+}
+
+function broadcastSources(origin) {
+  for (const fn of Array.from(SOURCE_SYNC_LISTENERS)) {
+    try {
+      fn(origin);
+    } catch (e) {
+      console.warn("[mini-translator] 源同步失败:", e);
+    }
+  }
+}
 
 function cached(key, fn) {
   if (CACHE.has(key)) return CACHE.get(key);
@@ -35,10 +73,28 @@ function checkStatus(res, label) {
   if (res.status !== 200) throw new Error(`HTTP ${res.status} (${label})`);
 }
 
-// ---------- 逐句切分：句末标点 + 空格 + 大写开头才算一句（避开 0.5、et al. 等） ----------
+// LaTeX 界定符：$...$、$$...$$、\(...\)、\[...\]（大模型常输出后两种）
+const MATH_RE = /(\$\$[\s\S]*?\$\$|\$[^$\n]*\$|\\\[[\s\S]*?\\\]|\\\([^$\n]*?\\\))/g;
+
+// ---------- 数学公式占位保护：翻译前替换，翻译后还原（任何引擎都不会翻坏公式） ----------
+function protectMath(text) {
+  const map = [];
+  const t = text.replace(MATH_RE, (m) => {
+    map.push(m);
+    return `⟦MT${map.length - 1}⟧`;
+  });
+  return { text: t, map };
+}
+
+function restoreMath(text, map) {
+  return text.replace(/⟦MT(\d+)⟧/g, (m, i) => map[Number(i)] || m);
+}
+
+// ---------- 逐句切分：句末标点 + 空格 + 大写开头才算一句（避开 0.5、et al. 等），且不切断公式 ----------
 function splitSentences(text) {
-  const parts = text.split(/(?<=[.!?])\s+(?=[A-Z"(])/);
-  const out = parts.map((p) => p.trim()).filter(Boolean);
+  const { text: t, map } = protectMath(text);
+  const parts = t.split(/(?<=[.!?])\s+(?=[A-Z"(])/);
+  const out = parts.map((p) => restoreMath(p.trim(), map)).filter(Boolean);
   return out.length > 1 ? out : [text];
 }
 
@@ -49,29 +105,206 @@ function cleanInvisibles(s) {
     .replace(/ /g, " ");
 }
 
+// ---------- 数学字符规范化：PDF 文本层常把数学字母导出为 Unicode 专用数学区字符 ----------
+const SUPER_MAP = {
+  "⁰": "0", "¹": "1", "²": "2", "³": "3",
+  "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+  "⁺": "+", "⁻": "-", "⁼": "=", "⁽": "(", "⁾": ")", "ⁿ": "n",
+};
+const SUB_MAP = {
+  "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
+  "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
+  "₊": "+", "₋": "-", "₌": "=", "₍": "(", "₎": ")",
+};
+
+// 粗体/斜体拉丁字母块（U+1D400–U+1D467）转回 ASCII；其余花体/哥特/双线块不确定，不动
+function plane1Letter(ch) {
+  const c = ch.codePointAt(0);
+  if (c >= 0x1d400 && c <= 0x1d419) return String.fromCharCode(c - 0x1d400 + 65); // 𝐀-𝐙
+  if (c >= 0x1d41a && c <= 0x1d433) return String.fromCharCode(c - 0x1d41a + 97); // 𝐚-𝐳
+  if (c >= 0x1d434 && c <= 0x1d44d) return String.fromCharCode(c - 0x1d434 + 65); // 𝐴-𝑍
+  if (c === 0x1d455) return "h"; // ℎ Planck 常量，占用了斜体 h 的码位
+  if (c >= 0x1d44e && c <= 0x1d467) return String.fromCharCode(c - 0x1d44e + 97); // 𝑎-𝑧
+  return ch;
+}
+
+// 无损还原：连续上标串 → ^xxx，连续下标串 → _xxx；数学减号 − → -
+function demathify(s) {
+  s = s.replace(/[\u{1d400}-\u{1d467}]/gu, plane1Letter);
+  s = s.replace(
+    /[⁰-⁹⁺-⁾ⁿ¹²³]+/g,
+    (run) => "^" + Array.from(run).map((ch) => SUPER_MAP[ch]).join("")
+  );
+  s = s.replace(
+    /[₀-₉₊-₎]+/g,
+    (run) => "_" + Array.from(run).map((ch) => SUB_MAP[ch]).join("")
+  );
+  return s.replace(/−/g, "-");
+}
+
+// ---------- 全文翻译：pdf.js 文本层 → 行（带几何） → 段落（带 bbox） → 翻译块 ----------
+// 把 textContent.items 按基线 y 聚成行（保留每行的横向范围），行内按 x 排序拼接。
+// v3 起返回带几何的块（x0/x1/yMax/yMin/h，PDF 坐标系，y 向上），
+// 老接口 pdfItemsToLines / pdfLinesToParagraphs 是它的投影，行为与旧版完全一致。
+function pdfItemsToBlocks(items) {
+  const rows = [];
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const x = it.transform[4];
+    const y = it.transform[5];
+    const h = Math.abs(it.transform[3]) || 10;
+    let row = null;
+    for (const r of rows) {
+      if (Math.abs(r.y - y) <= Math.max(2, h * 0.4)) {
+        row = r;
+        break;
+      }
+    }
+    const endX = x + (it.width || it.str.length * 4);
+    if (!row) {
+      row = { y, h, x0: x, x1: endX, items: [] };
+      rows.push(row);
+    }
+    row.items.push({ x, endX, str: it.str });
+    if (x < row.x0) row.x0 = x;
+    if (endX > row.x1) row.x1 = endX;
+    if (h > row.h) row.h = h;
+  }
+  rows.sort((a, b) => b.y - a.y); // 页面自上而下
+  return rows
+    .map((r) => {
+      r.items.sort((a, b) => a.x - b.x);
+      let s = "";
+      let prevEnd = null;
+      for (const it of r.items) {
+        if (!it.str) continue;
+        // 片段间有明显横向间隙且两侧无空格时补空格，避免单词粘连
+        if (
+          prevEnd !== null &&
+          it.x - prevEnd > 1 &&
+          !/\s$/.test(s) &&
+          !/^\s/.test(it.str)
+        )
+          s += " ";
+        s += it.str;
+        prevEnd = it.endX;
+      }
+      return {
+        text: s.replace(/\s+/g, " ").trim(),
+        y: r.y,
+        x0: r.x0,
+        x1: r.x1,
+        h: r.h,
+      };
+    })
+    .filter((l) => l.text);
+}
+
+function pdfItemsToLines(items) {
+  return pdfItemsToBlocks(items).map((b) => ({ text: b.text, y: b.y }));
+}
+
+// 行合并成段落：行距显著大于本页典型行距 → 新段落；行尾连字符 → 去连字符拼接。
+// 每个段落同时给出联合 bbox（PDF 坐标）：yMax=顶线基线上方、yMin=底线基线下方
+function mergeLinesToParas(lines) {
+  if (!lines.length) return [];
+  const diffs = [];
+  for (let i = 1; i < lines.length; i++) {
+    const d = lines[i - 1].y - lines[i].y;
+    if (d > 0) diffs.push(d);
+  }
+  diffs.sort((a, b) => a - b);
+  const lead = diffs.length ? diffs[Math.floor(diffs.length / 2)] : 12;
+  const paras = [];
+  let cur = null;
+  let prevY = null;
+  const flush = () => {
+    if (!cur) return;
+    const t = cur.text.replace(/\s+/g, " ").trim();
+    if (t)
+      paras.push({
+        text: demathify(cleanInvisibles(t)),
+        x0: cur.x0,
+        x1: cur.x1,
+        yMax: cur.yMax,
+        yMin: cur.yMin,
+        h: cur.h,
+      });
+    cur = null;
+  };
+  for (const ln of lines) {
+    const topEdge = ln.y + ln.h * 0.85;
+    const botEdge = ln.y - ln.h * 0.25;
+    if (!cur) {
+      cur = { text: ln.text, x0: ln.x0, x1: ln.x1, yMax: topEdge, yMin: botEdge, h: ln.h };
+      prevY = ln.y;
+      continue;
+    }
+    const gap = prevY - ln.y;
+    if (gap > lead * 1.45) {
+      flush();
+      cur = { text: ln.text, x0: ln.x0, x1: ln.x1, yMax: topEdge, yMin: botEdge, h: ln.h };
+    } else if (/[A-Za-z]-$/.test(cur.text)) {
+      cur.text = cur.text.slice(0, -1) + ln.text; // 断行连字符续接：optimiza- tion → optimization
+      if (ln.x0 < cur.x0) cur.x0 = ln.x0;
+      if (ln.x1 > cur.x1) cur.x1 = ln.x1;
+      if (botEdge < cur.yMin) cur.yMin = botEdge;
+    } else {
+      cur.text += " " + ln.text;
+      if (ln.x0 < cur.x0) cur.x0 = ln.x0;
+      if (ln.x1 > cur.x1) cur.x1 = ln.x1;
+      if (botEdge < cur.yMin) cur.yMin = botEdge;
+    }
+    prevY = ln.y;
+  }
+  flush();
+  return paras;
+}
+
+function pdfLinesToParagraphs(lines) {
+  return mergeLinesToParas(lines).map((b) => b.text);
+}
+
+// ---------- 数学片段保护：LaTeX 不被排版处理破坏 ----------
+function mapMath(text, fn) {
+  return text
+    .split(MATH_RE)
+    .map((p, i) => (i % 2 === 1 ? cleanInvisibles(p) : fn(p)))
+    .join("");
+}
+
 // ---------- 英文排版规范化：段落重排、弯引号、连字符续接、破折号 ----------
 function typofixEn(s) {
+  return mapMath(s, baseTypofixEn);
+}
+
+function baseTypofixEn(s) {
   let t = cleanInvisibles(s);
   t = t.replace(/\r\n?/g, "\n");
   t = t.replace(/[ \t]+/g, " ");
   // PDF 复制的硬换行：空行保留为段落分隔，其余换行并入段落自然折行
-  t = t.replace(/\n\s*\n/g, "");
+  t = t.replace(/\n\s*\n/g, "\u0001");
   t = t.replace(/\s*\n\s*/g, " ");
-  t = t.replace(//g, "\n\n");
+  t = t.replace(/\u0001/g, "\n\n");
   t = t.replace(/ +/g, " ");
   // 断行连字符续接：optimiza- tion → optimization
   t = t.replace(/([a-z])- ([a-z])/gi, "$1$2");
   // 弯引号、双连字符转破折号
-  t = t.replace(/(^|[\s(\[{])"/g, "$1“")
-    .replace(/"/g, "”")
-    .replace(/(^|[\s(\[{])'/g, "$1‘")
-    .replace(/'/g, "’")
-    .replace(/\s--\s/g, " — ");
+  t = t
+    .replace(/(^|[\s(\[{])"/g, "$1\u201c")
+    .replace(/"/g, "\u201d")
+    .replace(/(^|[\s(\[{])'/g, "$1\u2018")
+    .replace(/'/g, "\u2019")
+    .replace(/\s--\s/g, " \u2014 ");
   return t.trim();
 }
 
 // ---------- 中文译文排版规范化：折叠空白、清 \r、全角空格、压缩空行 ----------
 function typofixZh(s) {
+  return mapMath(s, baseTypofixZh);
+}
+
+function baseTypofixZh(s) {
   return cleanInvisibles(s)
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t　]+/g, " ")
@@ -82,11 +315,52 @@ function typofixZh(s) {
 
 // 译文段落重排：单个换行并入段落自然折行，空行保留为段落分隔（词典释义不适用）
 function reflowZh(s) {
-  let t = typofixZh(s);
-  t = t.replace(/\n\s*\n/g, "");
+  return mapMath(s, baseReflowZh);
+}
+
+function baseReflowZh(s) {
+  let t = baseTypofixZh(s);
+  t = t.replace(/\n\s*\n/g, "\u0001");
   t = t.replace(/\s*\n\s*/g, "");
-  t = t.replace(//g, "\n\n");
+  t = t.replace(/\u0001/g, "\n\n");
   return t;
+}
+
+// ---------- 富文本行渲染：文本 + LaTeX 公式（$..$/$$..$$/\(..\)/\[..\]）用 MathJax 渲染 ----------
+// renderMath(source, display) 返回 HTMLElement，需在全部渲染后调用 finishRenderMath()
+function renderRichText(container, text) {
+  const parts = text.split(MATH_RE);
+  let hasMath = false;
+  for (const part of parts) {
+    if (!part) continue;
+    let src = null;
+    let display = false;
+    if (part.startsWith("$$")) {
+      src = part.slice(2, -2);
+      display = true;
+    } else if (part.startsWith("\\[")) {
+      src = part.slice(2, -2);
+      display = true;
+    } else if (part.startsWith("$")) {
+      src = part.slice(1, -1);
+    } else if (part.startsWith("\\(")) {
+      src = part.slice(2, -2);
+    }
+    if (src !== null && typeof renderMath === "function") {
+      try {
+        container.appendChild(renderMath(src, display));
+        hasMath = true;
+      } catch (e) {
+        console.warn("[mini-translator] 公式渲染失败，退回文本:", part, e);
+        container.appendText(part); // 渲染失败退回原文（可选中复制）
+      }
+    } else {
+      container.appendText(part);
+    }
+  }
+  if (hasMath && typeof finishRenderMath === "function") {
+    finishRenderMath();
+  }
 }
 
 // ---------- 双语成对渲染：原文行弱化，译文行正常，人读的对照排版 ----------
@@ -95,11 +369,10 @@ function renderPairsTo(el, pairs) {
   el.empty();
   el.addClass("mini-flow");
   for (const p of pairs) {
-    el.createDiv({ text: typofixEn(p.en), cls: "mini-en-line" });
-    el.createDiv({
-      text: typofixZh(p.zh),
-      cls: p.dict ? "mini-dict-line" : "mini-zh-line",
-    });
+    const en = el.createDiv({ cls: "mini-en-line" });
+    renderRichText(en, typofixEn(p.en));
+    const zh = el.createDiv({ cls: p.dict ? "mini-dict-line" : "mini-zh-line" });
+    renderRichText(zh, typofixZh(p.zh));
   }
 }
 
@@ -426,7 +699,12 @@ let PLUGIN_SETTINGS = null;
 
 
 const TRANSLATE_PROMPT =
-  "你是学术论文翻译助手。把用户给出的英文翻译成中文：忠实原文、术语准确、符合中文学术表达习惯。只输出译文，不要任何解释或原文。";
+  "你是学术论文翻译助手。把用户给出的英文翻译成中文：忠实原文、术语准确、符合中文学术表达习惯。\n" +
+  "数学公式规则（重要）：\n" +
+  "1. 原文中以 ⟦MT数字⟧ 形式出现的占位符代表数学公式，必须原样保留在译文对应位置，不要翻译、修改或删除。\n" +
+  "2. PDF 提取的文本中公式经常残缺（如 x2 实为 x^2、上下标丢失、希腊字母乱码）。遇到明显是数学内容的片段，先根据上下文恢复成正确的 LaTeX，再包裹在 $...$（行内）或 $$...$$（独立公式）中放入译文；变量名和函数名不要翻译。\n" +
+  "3. 除以上情形外的普通文字正常翻译，不要随意添加公式界定符。\n" +
+  "只输出译文，不要任何解释或原文。";
 
 // ---------- 内置大模型预设（OpenAI 兼容端点；含默认模型列表，可再查询） ----------
 const LLM_PRESETS = [
@@ -501,6 +779,1018 @@ function sourceKey(name) {
 }
 
 // ---------- 弹窗：大模型配置管理（每个配置 = 一个翻译源） ----------
+// ---------- 翻译历史时间戳：M/D HH:MM ----------
+function fmtHistTime(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ---------- pdf.js 库加载：始终用插件自带的构建，绝对路径加载，worker 用 blob URL ----------
+// 关键坑：Obsidian 插件里 require('./相对路径') 锚在应用根而非插件目录，必须显式构造绝对路径。
+// 依次尝试 __dirname（若环境提供且指向插件目录）→ vault basePath + manifest.dir → 相对路径（Node 测试）。
+// worker 读本地文件建 blob URL，绕开 app:// 协议下 new Worker 被拒/CSP 拦截；
+// 目录里同时保留未压缩命名的 pdf.worker.js，让 fake-worker 的 require 兜底也能走通。
+let PDFJS_LIB = null;
+function pluginFileCandidates(plugin, relParts) {
+  const path = require("path");
+  const rel = path.join(...relParts);
+  const cands = [];
+  try {
+    if (typeof __dirname !== "undefined" && __dirname)
+      cands.push(path.join(__dirname, rel));
+  } catch (e) {}
+  try {
+    const base = plugin.app.vault.adapter.basePath;
+    if (base) cands.push(path.join(base, plugin.manifest.dir, rel));
+  } catch (e) {}
+  cands.push("./" + rel.split(path.sep).join("/")); // 相对 require 兜底（Node 测试环境）
+  return cands;
+}
+function loadPdfJs(plugin) {
+  if (PDFJS_LIB) return PDFJS_LIB;
+  let lib = null;
+  let err = null;
+  for (const c of pluginFileCandidates(plugin, ["lib", "pdf.min.js"])) {
+    try {
+      lib = require(c);
+      break;
+    } catch (e) {
+      err = e;
+    }
+  }
+  if (!lib) throw new Error(`加载自带 pdf.js 失败：${err?.message || err}`);
+  PDFJS_LIB = lib;
+  const fs = require("fs");
+  for (const c of pluginFileCandidates(plugin, ["lib", "pdf.worker.min.js"])) {
+    try {
+      const code = fs.readFileSync(c, "utf8");
+      PDFJS_LIB.GlobalWorkerOptions.workerSrc = URL.createObjectURL(
+        new Blob([code], { type: "application/javascript" })
+      );
+      break;
+    } catch (e) {
+      err = e;
+    }
+  }
+  if (!PDFJS_LIB.GlobalWorkerOptions.workerSrc) {
+    console.warn("[mini-translator] blob worker 构建失败，改用资源路径:", err);
+    try {
+      PDFJS_LIB.GlobalWorkerOptions.workerSrc =
+        plugin.app.vault.adapter.getResourcePath(
+          plugin.manifest.dir + "/lib/pdf.worker.min.js"
+        );
+    } catch (e2) {
+      console.warn("[mini-translator] worker 设置全部失败:", e2);
+    }
+  }
+  return PDFJS_LIB;
+}
+
+// 取任意 vault PDF 文件的文档对象：已在某视图中打开则直接复用其文档，否则独立解析二进制
+async function getPdfDocForFile(plugin, file) {
+  for (const leaf of plugin.app.workspace.getLeavesOfType("pdf")) {
+    try {
+      if (leaf.view.file && leaf.view.file.path === file.path) {
+        const child = leaf.view.viewer && leaf.view.viewer.child;
+        const pv = child && (child.pdfViewer || child);
+        if (pv && pv.pdfDocument) return { doc: pv.pdfDocument };
+        if (pv && pv.pdfLoadingTask && pv.pdfLoadingTask.promise) {
+          const doc = await pv.pdfLoadingTask.promise;
+          return { doc };
+        }
+      }
+    } catch (e) {}
+  }
+  const lib = loadPdfJs(plugin);
+  const data = new Uint8Array(await plugin.app.vault.readBinary(file));
+  const doc = await lib.getDocument({ data }).promise;
+  return { doc };
+}
+
+// token 估算（输入+输出粗估）：英文约 3.5 字符 ≈ 1 token
+function estTokens(chars) {
+  return Math.ceil(chars / 3.5);
+}
+function fmtTok(n) {
+  return n >= 10000
+    ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k"
+    : String(n);
+}
+
+// ---------- v3 批量协议：多块合并成一次请求，LLM 同一次产出「修复英文 + 中文」 ----------
+const FULL_PROMPT_LLM =
+  "你是学术论文翻译助手。用户给出同一篇 PDF 的若干文本段，每段以 ⟦MT数字⟧ 开头。PDF 文本层经常损坏数学与断词。\n" +
+  "对每段依次输出两行（顺序与输入一致，一段都不能漏）：\n" +
+  "⟦EN数字⟧ 该段英文原文的修复版：把残缺的数学重建为合法 LaTeX（行内 $...$、独立公式 $$...$$），修复断词与乱序，不增删内容、不要翻译；\n" +
+  "⟦ZH数字⟧ 对应的简体中文译文：忠实准确、术语规范，数学同样用 LaTeX 包裹在 $...$ 或 $$...$$ 中，变量名函数名不译；\n" +
+  "规则：所有 ⟦MT⟧⟦EN⟧⟦ZH⟧ 标记原样保留；除 LaTeX 定界符外不要添加任何新标记或解释；共 {N} 段必须全部输出。";
+
+// 免费源的批量协议已移除：全文翻译现在仅支持大模型源
+
+// 解析批量响应：LLM 用 ⟦ENn⟧/⟦ZHn⟧ 双产物；免费源回显 ⟦MTn⟧ 后跟译文。
+// 标记丢失/错号时，孤儿文本按出现顺序填进空槽，尽量不整批作废
+function parseBatchResponse(out, n, wantEn) {
+  const parts = out.split(/(⟦\s*(?:EN|ZH|MT)\s*\d+\s*⟧)/);
+  const en = new Map();
+  const zh = new Map();
+  const orphans = [];
+  let cur = null;
+  for (const seg of parts) {
+    const mm = seg.match(/^⟦\s*(EN|ZH)\s*(\d+)\s*⟧$/);
+    if (mm) {
+      cur = { map: mm[1] === "EN" ? en : zh, key: Number(mm[2]) };
+      continue;
+    }
+    const mt = seg.trim().match(/^⟦\s*MT\s*(\d+)\s*⟧$/);
+    if (mt) {
+      cur = { map: zh, key: Number(mt[1]) };
+      continue;
+    }
+    if (!seg.trim()) continue;
+    if (!cur) {
+      orphans.push(seg.trim());
+      continue;
+    }
+    const prev = cur.map.get(cur.key);
+    cur.map.set(cur.key, (prev ? prev + " " : "") + seg.trim());
+    cur = null;
+  }
+  const res = [];
+  let oi = 0;
+  for (let i = 1; i <= n; i++) {
+    let z = zh.get(i);
+    if (!z && oi < orphans.length) z = orphans[oi++];
+    if (!z) throw new Error(`第 ${i} 段缺失译文`);
+    res.push({ en: wantEn ? en.get(i) || "" : "", zh: z });
+  }
+  return res;
+}
+
+// 一批文本 → [{en,zh}]；LLM 一次请求双产物，失败/缺段抛错由上层兜底。
+// 全文翻译仅支持大模型源：非大模型主源直接抛错（入口处已提前拦截）
+async function translateBlockBatch(source, texts) {
+  const prof = findProfile(source);
+  if (!prof) throw new Error("全文翻译仅支持大模型源");
+  const marked = texts.map((t, i) => `⟦MT${i + 1}⟧ ${t}`).join("\n\n");
+  const out = await llmRequest(
+    `共 ${texts.length} 段。\n\n${marked}`,
+    prof,
+    FULL_PROMPT_LLM.replace("{N}", String(texts.length))
+  );
+  return parseBatchResponse(out, texts.length, true);
+}
+
+// ---------- 跳过判定：公式/表格碎片/超短行不做白块覆盖，原样保留像素 ----------
+function isSkippableBlock(b) {
+  const t = b.text || "";
+  if (t.length < 12) return true;
+  const letters = (t.match(/[A-Za-z]/g) || []).length;
+  return letters / t.length < 0.35;
+}
+
+// 全部块连续分组：≤8 块且 ≤2600 字符一批（v3.0.2 上调，减少请求数）
+// （全文翻译为大模型源专用：公式/碎片块也交给模型重建，跳过判定只用于 HTML 白块覆盖决策）
+function groupIntoBatches(blocks) {
+  const idxs = blocks.map((_, i) => i);
+  const batches = [];
+  let cur = [];
+  let chars = 0;
+  for (const i of idxs) {
+    const L = blocks[i].text.length;
+    if (cur.length && (cur.length >= 8 || chars + L > 2600)) {
+      batches.push(cur);
+      cur = [];
+      chars = 0;
+    }
+    cur.push(i);
+    chars += L;
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
+
+// 全部块翻译（带逐块缓存 + 取消 + 进度回调）；批解析失败自动降级为逐块单独翻。
+// v3.0.2：FULL_CONCURRENCY 路批次并发在途（LLM API 无状态可安全并行），吞吐约 ×3
+const FULL_CONCURRENCY = 3;
+
+async function translateBlocksAll(plugin, blocks, source, onProg) {
+  const batches = groupIntoBatches(blocks);
+  const results = new Array(blocks.length).fill(null);
+  // 取消竞速：requestFtCancel 后 cancelP 立即 resolve，在途请求的 await 马上返回
+  const cancelP = plugin.ftCancelPromise || new Promise(() => {});
+  const CANCEL = "__FT_CANCELLED__";
+  const withCancel = (p) => Promise.race([p, cancelP.then(() => CANCEL)]);
+  const t0 = Date.now();
+  let done = 0;
+  let doneChars = 0;
+  let finishedBatches = 0;
+  const tick = () => {
+    onProg &&
+      onProg({
+        phase: "翻译中",
+        detail:
+          finishedBatches < batches.length
+            ? `已完成批次 ${finishedBatches}/${batches.length}`
+            : "",
+        done,
+        total: blocks.length,
+        batches: batches.length,
+        tokDone: estTokens(doneChars),
+      });
+  };
+  const runBatch = async (bat) => {
+    const need = [];
+    const idx = [];
+    for (const gi of bat) {
+      const key = `full:${sourceKey(source)}:${blocks[gi].text}`;
+      const hit = CACHE.get(key);
+      if (hit) {
+        results[gi] = hit;
+        done++;
+        doneChars += blocks[gi].text.length;
+      } else {
+        need.push(blocks[gi].text);
+        idx.push(gi);
+      }
+    }
+    if (!need.length) {
+      finishedBatches++;
+      tick();
+      return;
+    }
+    tick();
+    let got = null;
+    try {
+      got = await withCancel(translateBlockBatch(source, need));
+    } catch (e) {
+      console.warn("[mini-translator] 批次解析失败，降级逐块:", e.message || e);
+    }
+    if (got === CANCEL) return; // 已取消：在途请求作废，不再写缓存
+    if (!got || got.length !== need.length) {
+      got = [];
+      for (const t of need) {
+        if (plugin.ftCancel) break;
+        try {
+          const key1 = `full-single:${sourceKey(source)}:${t}`;
+          let r = CACHE.get(key1);
+          if (!r) {
+            r = await withCancel(translateSentence(t, source));
+            if (r === CANCEL) break;
+            CACHE.set(key1, r);
+          }
+          got.push({ en: "", zh: r.text });
+        } catch (e2) {
+          got.push({ en: "", zh: `⚠️ 本块翻译失败：${e2.message || e2}` });
+        }
+      }
+    }
+    idx.forEach((gi, k) => {
+      const rec = { en: got[k]?.en || "", zh: got[k]?.zh || "" };
+      results[gi] = rec;
+      done++;
+      doneChars += blocks[gi].text.length;
+      CACHE.set(`full:${sourceKey(source)}:${blocks[gi].text}`, rec);
+    });
+    finishedBatches++;
+    tick();
+  };
+  let next = 0; // 单线程事件循环里领取批次，无竞态
+  const worker = async () => {
+    while (!plugin.ftCancel) {
+      const i = next++;
+      if (i >= batches.length) break;
+      await runBatch(batches[i]);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(FULL_CONCURRENCY, batches.length) },
+      () => worker()
+    )
+  );
+  return { results, batches };
+}
+
+// ---------- 整本提取：全页行几何 → 跨页页眉/页脚剔除 → 带 bbox 的段落块 ----------
+function normChromeLine(s) {
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+async function extractDocBlocks(doc, onProg) {
+  const pagesLines = [];
+  const n = doc.numPages;
+  for (let i = 1; i <= n; i++) {
+    if (onProg) onProg(i, n);
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    pagesLines.push(pdfItemsToBlocks(tc.items));
+  }
+  // 页眉/页脚：出现在某页首末两行、且在 ≥60% 页重复的短文本 → 判定为装饰性重复
+  const freq = new Map();
+  for (const lines of pagesLines) {
+    const cand = [lines[0], lines[1], lines[lines.length - 1], lines[lines.length - 2]];
+    for (const l of cand) {
+      if (!l) continue;
+      const k = normChromeLine(l.text);
+      if (k.length > 2 && k.length < 120)
+        freq.set(k, (freq.get(k) || 0) + 1);
+    }
+  }
+  const thresh = Math.max(2, Math.ceil(pagesLines.length * 0.6));
+  const chrome = new Set(
+    [...freq].filter(([, c]) => c >= thresh).map(([k]) => k)
+  );
+  const blocks = [];
+  const parasByPage = [];
+  pagesLines.forEach((lines, pi) => {
+    const kept = chrome.size
+      ? lines.filter((l) => !chrome.has(normChromeLine(l.text)))
+      : lines;
+    const pb = mergeLinesToParas(kept);
+    parasByPage.push(pb.map((b) => b.text));
+    for (const b of pb) blocks.push({ ...b, page: pi + 1 });
+  });
+  return { blocks, parasByPage, chromeCount: chrome.size };
+}
+
+// ---------- 进度窗（应用内弹窗版，v3.0.4 起为默认）：可拖动 + 点击外部/ESC 不误关 + 动态进度条 ----------
+class TranslateProgressModal extends Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+    this.plugin.progModal = this;
+    this.finished = false; // 完成前屏蔽 ESC / 点击外部的关闭请求
+    this._cleanup = [];
+    // 匀速爬动进度引擎状态
+    this.disp = 0; // 当前显示进度 0..1（单调不减，每次最多 +1%）
+    this.basePct = 0; // 最近一次真实进度
+    this.real = null; // { done, total, t } 最近真实值
+    this.rate = 0; // 整体进度速率（fraction/ms，EMA，随时间修正）
+    this.t0 = 0; // 当前阶段起点
+    this.animKey = ""; // 阶段标识：变化时重置显示进度
+    this._lastSt = null;
+  }
+
+  onOpen() {
+    this.modalEl.addClass("mini-prog-modal");
+    const c = this.contentEl;
+    c.empty();
+
+    const head = c.createDiv("mini-prog-head");
+    head.createSpan("mini-prog-dot");
+    head.createSpan({ text: "全文翻译进度" });
+
+    this.phaseEl = c.createDiv("mini-prog-phase");
+    this.phaseEl.setText("准备中…");
+    this.detailEl = c.createDiv("mini-prog-detail");
+
+    const barWrap = c.createDiv("mini-prog-bar");
+    this.barFill = barWrap.createDiv("mini-prog-fill");
+    this.pctEl = c.createDiv("mini-prog-pct");
+    this.pctEl.setText("0%");
+    this.metaEl = c.createDiv("mini-prog-meta");
+
+    // 匀速爬动引擎：120ms 一跳，按估算速率推进（领先真实值 ≤5%、封顶 97%）
+    this.animTimer = setInterval(() => this.tick(), 120);
+    this._cleanup.push(() => clearInterval(this.animTimer));
+
+    // 标题栏拖动（fixed 定位，拖到任意位置）
+    let sx = 0,
+      sy = 0,
+      ox = 0,
+      oy = 0,
+      dragging = false;
+    const mv = (e) => {
+      if (!dragging) return;
+      this.modalEl.style.left = `${ox + e.clientX - sx}px`;
+      this.modalEl.style.top = `${oy + e.clientY - sy}px`;
+    };
+    const up = () => {
+      dragging = false;
+    };
+    head.addEventListener("mousedown", (e) => {
+      const r = this.modalEl.getBoundingClientRect();
+      this.modalEl.style.position = "fixed";
+      this.modalEl.style.margin = "0";
+      ox = r.left;
+      oy = r.top;
+      sx = e.clientX;
+      sy = e.clientY;
+      dragging = true;
+      e.preventDefault();
+    });
+    window.addEventListener("mousemove", mv);
+    window.addEventListener("mouseup", up);
+    this._cleanup.push(() => {
+      window.removeEventListener("mousemove", mv);
+      window.removeEventListener("mouseup", up);
+    });
+
+    const btns = c.createDiv("mini-prog-foot");
+    const cancelBtn = btns.createEl("button", { text: "取消翻译" });
+    cancelBtn.onclick = () => {
+      this.plugin.requestFtCancel();
+      this.phaseEl.setText("正在取消…在途请求已失效");
+      cancelBtn.disabled = true;
+      cancelBtn.setText("已请求取消");
+      this.finished = true; // 允许直接 ESC/点外部关窗，后台自行快速收尾
+    };
+  }
+
+  update(st = {}) {
+    if (this.phaseEl && st.phase) this.phaseEl.setText(st.phase);
+    if (this.detailEl)
+      this.detailEl.setText([st.detail, st.file].filter(Boolean).join(" · "));
+    this._lastSt = st;
+    if (!st.total) {
+      this.modalEl.addClass("mini-prog-indet"); // 无总量时脉动动画
+      if (this.metaEl) this.metaEl.setText("");
+      return;
+    }
+    this.modalEl.removeClass("mini-prog-indet");
+    const key = `${st.phase || ""}:${st.total}`;
+    if (key !== this.animKey) {
+      this.animKey = key; // 换阶段（提取→翻译→渲染）重置显示进度
+      this.disp = 0;
+      this.rate = 0;
+      this.real = null;
+      this.t0 = 0;
+    }
+    const now = Date.now();
+    if (st.phase === "翻译中") {
+      if (!this.t0) this.t0 = now;
+      if (!this.rate) {
+        // 种子速率：估计总耗时 = 批数 × 每批 ~10s ÷ 3 路并发 → 1/估算总时长
+        this.rate = 1 / Math.max(1, (st.batches || 1) * (10000 / 3));
+      }
+      if (this.real && st.done > this.real.done) {
+        // 真实批次落地：用实际平均速度修正整体速率（EMA）
+        const inst = st.done / st.total / Math.max(1, now - this.t0);
+        this.rate = this.rate * 0.6 + inst * 0.4;
+      }
+      this.real = { done: st.done, total: st.total, t: now };
+      this.basePct = st.done / st.total;
+      // 不再直接改 disp —— 位置一律由 tick() 按 1% 步长推进，避免一批落地跳一大截
+    } else {
+      // 提取/渲染/写入：页级线性进度，直接跟真实值（短时相，无跳变问题）
+      this.disp = st.done / st.total;
+      this.basePct = this.disp;
+    }
+    this.paint();
+  }
+
+  // 动画帧：按整体速率匀速爬行，每次最多 +1%
+  tick() {
+    if (!this.real) return;
+    // 调度目标 = 整体速率 × 已用时长（随真实进度修正的匀速爬行）
+    const target = this.rate * Math.max(0, Date.now() - this.t0);
+    // 下限：真实进度（不显示少于真实）；上限：真实 +8%、封顶 97%（不撒谎、也不冻结）
+    const ceil = Math.min(0.97, this.basePct + 0.08);
+    const goal = Math.max(this.basePct, Math.min(target, ceil));
+    if (goal > this.disp) {
+      this.disp = Math.min(goal, this.disp + 0.01); // 1% 步长
+    }
+    this.paint();
+  }
+
+  paint() {
+    const st = this._lastSt || {};
+    const pct = Math.min(100, Math.round(this.disp * 100));
+    if (this.barFill) this.barFill.style.width = `${pct}%`;
+    if (this.pctEl) this.pctEl.setText(`${pct}%`);
+    const bits = [];
+    if (st.total) bits.push(`${st.done}/${st.total} 块`);
+    if (st.tokDone) bits.push(`≈${fmtTok(st.tokDone)} tokens 已用`);
+    if (this.real && this.rate > 0 && this.disp < 0.97) {
+      const remMs = (1 - this.disp) / this.rate;
+      bits.push(
+        remMs < 90000
+          ? `剩余 ~${Math.max(1, Math.round(remMs / 1000))} 秒`
+          : `剩余 ~${(remMs / 60000).toFixed(1)} 分钟`
+      );
+    }
+    if (this.metaEl) this.metaEl.setText(bits.join(" · "));
+  }
+
+  // 完成或取消后真正关闭；其余 close 请求（ESC/点外部）一律忽略
+  requestClose() {
+    this.finished = true;
+    this.close();
+  }
+
+  // 收尾：把进度顶到 100% 再关，避免停在中间就消失
+  finish() {
+    this.disp = 1;
+    this.paint();
+    this.requestClose();
+  }
+
+  close() {
+    if (!this.finished) return;
+    super.close();
+  }
+
+  onClose() {
+    for (const f of this._cleanup) f();
+    this._cleanup = [];
+    if (this.plugin.progModal === this) this.plugin.progModal = null;
+  }
+}
+
+
+// ---------- 页面渲染：pdf.js 把整页画成 JPEG（图表/公式像素原样保留） ----------
+async function renderPageImages(plugin, doc, scale, quality, onProg) {
+  const n = doc.numPages;
+  const out = [];
+  for (let i = 1; i <= n; i++) {
+    if (onProg) onProg(i, n);
+    const page = await doc.getPage(i);
+    const vp = page.getViewport({ scale });
+    const cv = document.createElement("canvas");
+    cv.width = Math.floor(vp.width);
+    cv.height = Math.floor(vp.height);
+    await page.render({
+      canvasContext: cv.getContext("2d"),
+      viewport: vp,
+    }).promise;
+    out.push({
+      dataUrl: cv.toDataURL("image/jpeg", quality),
+      w: vp.width,
+      h: vp.height,
+      vp,
+    });
+  }
+  return out;
+}
+
+// 块的 PDF 坐标 bbox → 相对页面尺寸的百分比定位
+function blockRectPct(block, viewport, pw, ph) {
+  const p1 = viewport.convertToViewportPoint(block.x0, block.yMax);
+  const p2 = viewport.convertToViewportPoint(block.x1, block.yMin);
+  const left = (Math.min(p1[0], p2[0]) / pw) * 100;
+  const top = (Math.min(p1[1], p2[1]) / ph) * 100;
+  const w = (Math.abs(p2[0] - p1[0]) / pw) * 100;
+  const h = (Math.abs(p2[1] - p1[1]) / ph) * 100;
+  return { left, top, width: w, height: h };
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// 模型常返回 \( \) / \[ \] 定界符（Obsidian 只认 $/$$），且相邻独立公式会粘成 $$$$。
+// 统一归一到 Obsidian 可渲染的形态
+function normalizeMathDelims(s) {
+  if (!s) return s;
+  s = s.replace(/\\\[((?:.|\n)+?)\\\]/g, (_m, t) => `\n\n$$${t}$$\n\n`);
+  s = s.replace(/\\\(((?:.|\n)+?)\\\)/g, (_m, t) => `$${t}$`);
+  // 相邻 display 公式之间补空行，避免 $$$$ 被解析成奇数个定界符
+  // （用函数形式返回：字符串替换里 "$$" 会被解释成字面量单个 $）
+  s = s.replace(/\$\$\s*\$\$/g, () => "$$\n\n$$");
+  return s;
+}
+
+// data:image/jpeg;base64,... → ArrayBuffer（写页面图片附件用）
+function dataUrlToBuffer(d) {
+  const b64 = d.slice(d.indexOf(",") + 1);
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8.buffer;
+}
+
+// ---------- 原版式复刻 HTML：页面图打底 + 白块覆盖写中文 + 打印即 PDF + 可编辑纠错 ----------
+function buildReplicaHtml(meta, pages) {
+  const pgHtml = pages
+    .map((p) => {
+      const blks = p.blocks
+        .map((b) => {
+          if (b.skip) return "";
+          const r = b.rect;
+          return (
+            `<div class="blk" style="left:${r.left.toFixed(2)}%;top:${r.top.toFixed(2)}%;` +
+            `width:${r.width.toFixed(2)}%;min-height:${Math.max(r.height, 1.2).toFixed(2)}%;">` +
+            `<div class="en">${escapeHtml(b.en || b.orig)}</div>` +
+            `<div class="zh">${escapeHtml(b.zh)}</div></div>`
+          );
+        })
+        .join("");
+      return `<div class="pg"><img src="${p.img}" alt="page"/><div class="blks">${blks}</div></div>`;
+    })
+    .join("\n");
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(meta.title)}</title>
+<script>window.MathJax={tex:{inlineMath:[["$","$"],["\\\\(","\\\\)"]],displayMath:[["$$","$$"],["\\\\[","\\\\]"]],processEscapes:true},chtml:{matchFontHeight:false},startup:{pageReady:function(){return MathJax.startup.defaultPageReady().then(function(){if(window.__mtFit)window.__mtFit();});}}};</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<style>
+body{margin:0;background:#404040;font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif;}
+.toolbar{position:sticky;top:0;z-index:99;display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:8px 14px;background:#262626;color:#e8e8e8;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.4);}
+.toolbar label{cursor:pointer;display:flex;align-items:center;gap:4px;}
+.toolbar button{background:#3d7edb;border:0;color:#fff;border-radius:5px;padding:4px 12px;cursor:pointer;font-size:13px;}
+.toolbar .hint{color:#999;margin-left:auto;}
+.pg{position:relative;width:min(920px,100%);margin:16px auto;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.4);}
+.pg>img{display:block;width:100%;}
+.blks{position:absolute;inset:0;}
+.blk{position:absolute;background:#fff;color:#111;line-height:1.55;padding:0 3px;box-sizing:border-box;overflow:hidden;border-radius:1px;}
+.blk .en{display:none;color:#777;font-size:.82em;line-height:1.35;border-bottom:1px dashed #c9c9c9;padding-bottom:2px;margin-bottom:3px;}
+body.show-en .blk .en{display:block;}
+body.editing .blk .zh{outline:1px dashed #4a90d9;cursor:text;}
+mjx-container{max-width:none!important;}
+@media print{
+ body{background:#fff;}
+ .toolbar{display:none;}
+ .pg{width:100%;margin:0;box-shadow:none;break-after:page;}
+ .blk{overflow:visible;}
+}
+@page{size:auto;margin:0;}
+</style>
+</head>
+<body>
+<div class="toolbar">
+ <label><input type="checkbox" id="tEn"> 显示原文</label>
+ <label><input type="checkbox" id="tEdit"> 编辑译文</label>
+ <button id="tSave">保存修改</button>
+ <span class="hint">导出 PDF：Ctrl+P → 目标选「另存为 PDF」→ 边距设「无」</span>
+</div>
+${pgHtml}
+<script>
+var fit=function(){
+ document.querySelectorAll(".blk").forEach(function(el){
+  var zh=el.querySelector(".zh"); if(!zh) return;
+  var box=el.getBoundingClientRect();
+  var fs=Math.max(8.5,Math.min(box.height*0.62,15));
+  el.style.fontSize=fs+"px";
+  var guard=80;
+  while(el.scrollHeight>el.clientHeight+1&&fs>7&&guard-->0){fs-=0.5;el.style.fontSize=fs+"px";}
+ });
+};
+window.__mtFit=fit;
+window.addEventListener("load",function(){fit();setTimeout(fit,600);});
+document.getElementById("tEn").addEventListener("change",function(){document.body.classList.toggle("show-en",this.checked);fit();});
+document.getElementById("tEdit").addEventListener("change",function(){
+ document.body.classList.toggle("editing",this.checked);
+ document.querySelectorAll(".blk .zh").forEach(function(z){z.contentEditable=this.checked?"true":"false";},this);
+});
+document.getElementById("tSave").addEventListener("click",function(){
+ document.body.classList.remove("editing","show-en");
+ document.querySelectorAll(".blk .zh").forEach(function(z){z.removeAttribute("contenteditable");});
+ var html="<!doctype html>\\n"+document.documentElement.outerHTML;
+ var name=document.title.replace(/[\\\\/:*?\\"<>|]/g,"_")+".html";
+ if(window.showSaveFilePicker){
+  window.showSaveFilePicker({suggestedName:name}).then(function(h){return h.createWritable().then(function(w){w.write(html);return w.close();});}).then(function(){alert("已保存修改。");});
+ }else{
+  var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([html],{type:"text/html"}));a.download=name;a.click();
+ }
+});
+</script>
+</body>
+</html>`;
+}
+
+// ---------- 全文翻译：开始前确认弹窗（页数/请求数/预计耗时，点头才开跑） ----------
+class FullTranslateModal extends Modal {
+  constructor(app, plugin, info) {
+    super(app);
+    this.plugin = plugin;
+    this.info = info;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "全文翻译确认" });
+    const grid = contentEl.createDiv();
+    grid.style.lineHeight = "1.9";
+    grid.style.fontSize = "var(--font-ui-small)";
+    for (const l of [
+      `文档：${this.info.fileName}（${this.info.pages} 页）`,
+      `文本块：${this.info.transN} 块（含公式块，由大模型重建为 LaTeX）`,
+      `≈${fmtTok(this.info.tokensEst || 0)} tokens · 约 ${this.info.chunks} 次批量请求`,
+      `预计耗时：${this.info.eta}`,
+      `翻译源：${this.info.source}`,
+      `输出：Markdown 笔记 + 原版式 HTML（浏览器 Ctrl+P 即同版式 PDF）`,
+    ]) {
+      grid.createDiv({ text: l });
+    }
+    const btns = contentEl.createDiv();
+    btns.style.display = "flex";
+    btns.style.gap = "8px";
+    btns.style.marginTop = "14px";
+    const start = btns.createEl("button", { text: "开始翻译", cls: "mod-cta" });
+    start.onclick = () => {
+      this.close();
+      this.plugin.runFullTranslate(this.info);
+    };
+    const cancel = btns.createEl("button", { text: "取消" });
+    cancel.onclick = () => this.close();
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+// ---------- 弹窗：勾选 vault 里的一个/多个 PDF 全文翻译，底部实时汇总 token 估算 ----------
+class FilePickTranslateModal extends Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+    this.selected = new Set(); // path
+    this.statsCache = new Map(); // path -> {pages, blocksN, batchesN, chars, tokensEst}
+    this.blocksCache = new Map(); // path -> blocks（开跑时直接复用，免二次解析）
+    this.docsCache = new Map(); // path -> pdf.js document（同上：开跑复用，启动提速）
+    this.pending = new Set(); // 正在统计的 path
+    this.failed = new Map(); // path -> 失败原因
+    this.chain = Promise.resolve(); // 解析任务串行化，避免同时啃多个大文件
+    this.openDirs = new Set(); // 目录树上展开的文件夹 path
+  }
+
+  // vault PDF 列表 → 文件系统目录树（只含含 PDF 的分支）
+  buildTree(files) {
+    const root = { name: "", path: "", dirs: new Map(), pdfs: [] };
+    for (const f of files) {
+      const parts = f.path.split("/");
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const seg = parts[i];
+        if (!node.dirs.has(seg))
+          node.dirs.set(seg, {
+            name: seg,
+            path: parts.slice(0, i + 1).join("/"),
+            dirs: new Map(),
+            pdfs: [],
+          });
+        node = node.dirs.get(seg);
+      }
+      node.pdfs.push(f);
+    }
+    return root;
+  }
+
+  // 节点下全部 PDF（递归），供文件夹全选/计数
+  collectPdfs(node, out) {
+    for (const f of node.pdfs) out.push(f);
+    for (const d of node.dirs.values()) this.collectPdfs(d, out);
+    return out;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "全文翻译：选择文件" });
+    const search = contentEl.createEl("input", { type: "text" });
+    search.placeholder = "搜索文件名…";
+    search.style.cssText =
+      "width:100%;margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid var(--background-modifier-border);background:var(--background-primary);color:var(--text-normal)";
+    const listEl = contentEl.createDiv();
+    listEl.style.cssText =
+      "max-height:300px;overflow-y:auto;border:1px solid var(--background-modifier-border);border-radius:8px;padding:4px;";
+    this.listElRef = listEl;
+    this.summaryEl = contentEl.createDiv({ cls: "mini-pick-summary" });
+
+    const files = this.plugin.app.vault
+      .getFiles()
+      .filter((f) => f.extension === "pdf")
+      .sort((a, b) => b.stat.mtime - a.stat.mtime);
+    const byPath = new Map(files.map((f) => [f.path, f]));
+    const tree = this.buildTree(files);
+
+    // 一行 PDF：复选框 + 文件名 + 实时统计
+    const makeRow = (f, depth) => {
+      const row = listEl.createDiv({ cls: "mini-pick-row" });
+      row.setAttribute("data-path", f.path);
+      row.style.paddingLeft = `${6 + depth * 16}px`;
+      row.onclick = (ev) => {
+        if (ev.target.tagName === "INPUT") return;
+        cb.checked = !cb.checked;
+        cb.onchange();
+      };
+      const cb = row.createEl("input", { type: "checkbox" });
+      cb.checked = this.selected.has(f.path);
+      cb.style.cursor = "pointer";
+      cb.onchange = () =>
+        this.toggleFile(byPath.get(f.path), cb.checked, rerender);
+      row.createSpan({
+        cls: "mini-pick-name",
+        text: f.name,
+        attr: { title: f.path },
+      });
+      const statSpan = row.createSpan({ cls: "mini-pick-stat" });
+      this.updateRowStat(f.path, statSpan);
+    };
+
+    // 一行文件夹：▸/▾ 折叠 + 名称 + 全选复选框（n/m 已选）
+    const makeDirRow = (node, depth) => {
+      const all = this.collectPdfs(node, []);
+      const selN = all.filter((f) => this.selected.has(f.path)).length;
+      const row = listEl.createDiv({ cls: "mini-pick-row" });
+      row.style.paddingLeft = `${6 + depth * 16}px`;
+      const open = this.openDirs.has(node.path);
+      const arrow = row.createSpan({ cls: "mini-pick-name" });
+      arrow.style.flex = "1";
+      arrow.setText(`${open ? "▾" : "▸"} ${node.name} (${selN}/${all.length})`);
+      arrow.style.cursor = "pointer";
+      arrow.onclick = () => {
+        if (open) this.openDirs.delete(node.path);
+        else this.openDirs.add(node.path);
+        rerender();
+      };
+      const cb = row.createEl("input", { type: "checkbox" });
+      cb.style.cursor = "pointer";
+      cb.checked = selN > 0 && selN === all.length;
+      cb.indeterminate = selN > 0 && selN < all.length;
+      cb.onchange = () => {
+        for (const f of all) {
+          if (cb.checked) {
+            if (!this.selected.has(f.path)) this.toggleFile(f, true, null);
+          } else this.toggleFile(f, false, null);
+        }
+        setTimeout(rerender, 50);
+      };
+    };
+
+    const renderTree = () => {
+      listEl.empty();
+      const walk = (node, depth) => {
+        for (const d of [...node.dirs.values()].sort((a, b) =>
+          a.name.localeCompare(b.name)
+        )) {
+          makeDirRow(d, depth);
+          if (this.openDirs.has(d.path)) walk(d, depth + 1);
+        }
+        for (const f of node.pdfs) makeRow(f, depth);
+      };
+      walk(tree, 0);
+    };
+
+    // 搜索时退平铺（带完整路径），空关键字回到目录树
+    const renderFlat = (kwRaw) => {
+      listEl.empty();
+      const kw = (kwRaw || "").toLowerCase();
+      for (const f of files) {
+        if (kw && !f.path.toLowerCase().includes(kw)) continue;
+        makeRow(f, 0);
+        const lastRow = listEl.lastElementChild;
+        lastRow.querySelector(".mini-pick-name").setText(f.path);
+      }
+    };
+
+    const rerender = () => {
+      const kw = search.value.trim();
+      if (kw) renderFlat(kw);
+      else renderTree();
+      this.refreshAll();
+    };
+    rerender();
+    search.oninput = () => rerender();
+
+    this.updateSummary(null);
+    const btns = contentEl.createDiv();
+    btns.style.cssText =
+      "display:flex;gap:8px;margin-top:12px;justify-content:flex-end;";
+    this.startBtn = btns.createEl("button", {
+      text: "开始翻译",
+      cls: "mod-cta",
+    });
+    this.startBtn.disabled = true;
+    this.startBtn.onclick = () => {
+      if (!this.plugin.ensureLlmForFull()) return;
+      const jobs = Array.from(this.selected)
+        .map((p) => ({
+          file: byPath.get(p),
+          blocks: this.blocksCache.get(p) || null,
+          doc: this.docsCache.get(p) || null, // 已解析的文档直接带走，开跑免二次解析
+        }))
+        .filter((j) => j.file);
+      if (!jobs.length) return;
+      this.close();
+      this.plugin.runPickedTranslate(jobs);
+    };
+    const cancelBtn = btns.createEl("button", { text: "取消" });
+    cancelBtn.onclick = () => this.close();
+  }
+
+  toggleFile(file, checked, rerenderRow) {
+    const p = file.path;
+    if (!checked) {
+      this.selected.delete(p);
+      this.refreshAll();
+      return;
+    }
+    this.selected.add(p);
+    if (
+      !this.statsCache.has(p) &&
+      !this.pending.has(p) &&
+      !this.failed.has(p)
+    ) {
+      // 第一次勾选：懒解析统计（串行队列），完成后行内与底部汇总实时更新
+      this.pending.add(p);
+      this.refreshAll();
+      this.chain = this.chain.then(async () => {
+        try {
+          const { doc } = await getPdfDocForFile(this.plugin, file);
+          this.docsCache.set(p, doc); // 开跑时直接复用，省一次解析（启动提速）
+          const r = await extractDocBlocks(doc);
+          let chars = 0;
+          for (const b of r.blocks) chars += b.text.length;
+          if (!chars) throw new Error("无文本层");
+          this.blocksCache.set(p, r.blocks);
+          this.statsCache.set(p, {
+            pages: doc.numPages,
+            chars,
+            blocksN: r.blocks.length,
+            batchesN: groupIntoBatches(r.blocks).length,
+            tokensEst: estTokens(chars),
+          });
+        } catch (e) {
+          console.warn("[mini-translator] 解析失败:", file.path, e);
+          const msg = String(e?.message || e || "未知错误").slice(0, 60);
+          this.failed.set(
+            p,
+            /无文本层/.test(e.message || "")
+              ? "✗ 扫描件无文本层"
+              : `✗ 无法解析：${msg}`
+          );
+          this.selected.delete(p); // 解析失败的文件不允许参与翻译
+          if (rerenderRow) rerenderRow();
+        } finally {
+          this.pending.delete(p);
+          this.refreshAll();
+        }
+      });
+      return;
+    }
+    this.refreshAll();
+  }
+
+  updateRowStat(path, span) {
+    if (!span) return;
+    if (this.failed.has(path)) {
+      span.setText(this.failed.get(path));
+      return;
+    }
+    if (this.pending.has(path)) {
+      span.setText("统计中…");
+      return;
+    }
+    const s = this.statsCache.get(path);
+    if (!s) return;
+    span.setText(
+      `${s.pages}页 · ${s.blocksN}块 · ≈${fmtTok(s.tokensEst)} tok`
+    );
+  }
+
+  refreshAll() {
+    if (this.listElRef) {
+      for (const row of this.listElRef.querySelectorAll(".mini-pick-row")) {
+        this.updateRowStat(
+          row.getAttribute("data-path"),
+          row.querySelector(".mini-pick-stat")
+        );
+      }
+    }
+    this.updateSummary();
+  }
+
+  updateSummary() {
+    if (!this.summaryEl) return;
+    let n = 0;
+    let tokens = 0;
+    let reqs = 0;
+    let chars = 0;
+    for (const p of this.selected) {
+      const s = this.statsCache.get(p);
+      if (s) {
+        n++;
+        tokens += s.tokensEst;
+        reqs += s.batchesN;
+        chars += s.chars;
+      }
+    }
+    const prof = findProfile(this.plugin.settings.primarySource);
+    const parts = [`已选 ${n} 个文件`];
+    parts.push(`≈${fmtTok(chars)} 字符`);
+    parts.push(`≈${fmtTok(tokens)} tokens`);
+    parts.push(`${reqs} 次请求`);
+    if (n)
+      parts.push(
+        prof ? `预计 ~${Math.max(1, Math.ceil((reqs * 3.5) / 60))} 分钟` : "预计 <1 分钟"
+      );
+    const pend = Array.from(this.pending).filter((p) => this.selected.has(p));
+    if (pend.length) parts.push(`${pend.length} 个统计中…`);
+    this.summaryEl.setText(parts.join("　·　"));
+    if (this.startBtn) this.startBtn.disabled = n === 0 || pend.length > 0;
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 class LLMConfigModal extends Modal {
   constructor(app, plugin) {
     super(app);
@@ -809,10 +2099,15 @@ function engineOptions() {
 }
 
 async function translateSentence(text, primary) {
+  // 数学公式先替换成占位符，任何引擎都不会翻坏，返回后再还原
+  const { text: safeText, map } = protectMath(text);
   // 若选中的是某个大模型配置，直接用该配置翻译（不回退到免费源，避免隐性切换）
   const prof = findProfile(primary);
   if (prof) {
-    return { text: await llmRequest(text, prof), via: prof.name };
+    return {
+      text: restoreMath(await llmRequest(safeText, prof), map),
+      via: prof.name,
+    };
   }
   const order = [
     primary,
@@ -821,7 +2116,7 @@ async function translateSentence(text, primary) {
   for (const name of order) {
     const fn = ENGINES.find((e) => e.name === name).fn;
     try {
-      return { text: await fn(text), via: name };
+      return { text: restoreMath(await fn(safeText), map), via: name };
     } catch (e) {
       console.log(`[mini-translator] ${name} 失败:`, e.message || e);
     }
@@ -897,11 +2192,39 @@ class MiniTranslatorView extends ItemView {
     this.flowEl = this.contentEl.createDiv({ cls: "mini-flow" });
     this.metaEl = this.contentEl.createDiv({ cls: "mini-meta" });
 
+    // 翻译历史：默认收起（不常驻），点时钟小图标展开；
+    // 条目显示 时间·翻译源，文件/页码藏在详情小图标里
+    this.histOpen = false;
+    this.histBar = this.contentEl.createDiv({ cls: "mini-hist-bar" });
+    this.histToggleBtn = this.histBar.createEl("span", {
+      cls: "mini-icon-btn",
+      attr: { "aria-label": "翻译历史", title: "翻译历史" },
+    });
+    setIcon(this.histToggleBtn, "history");
+    this.histToggleBtn.onclick = () => this.toggleHistory();
+    this.histClearBtn = this.histBar.createEl("span", {
+      cls: "mini-icon-btn",
+      attr: { "aria-label": "清空全部历史", title: "清空全部历史" },
+    });
+    setIcon(this.histClearBtn, "trash-2");
+    this.histClearBtn.onclick = async () => {
+      this.plugin.settings.history = [];
+      await this.plugin.saveData(this.plugin.settings);
+      this.renderHistory();
+      new Notice("已清空翻译历史", 1500);
+    };
+    this.histListEl = this.contentEl.createDiv({ cls: "mini-hist-list" });
+    this.refreshHistoryCount();
+
     this.emptyEl = this.contentEl.createDiv({
       cls: "mini-empty",
       text: "选中文本后按快捷键\n原文与译文逐句对照显示在这里",
     });
     this.showPlaceholder();
+    // 面板刚打开也走一次全量重建：否则下拉里只有内置引擎，大模型源要等下一次同步才出现
+    this.syncSource();
+    // 订阅中枢：设置页/管理弹窗改了任何源、模型或选中状态，这里立即实时重建
+    this.unsubSources = onSourcesSync(() => this.syncSource());
   }
   showPlaceholder() {
     this.flowEl.hide();
@@ -948,6 +2271,83 @@ class MiniTranslatorView extends ItemView {
     const cur = prof.activeModel || (prof.models && prof.models[0]) || "";
     if (cur) dd.setValue(cur);
   }
+  // ---------- 翻译历史 ----------
+  refreshHistoryCount() {
+    if (!this.histToggleBtn) return;
+    const n = (this.plugin.settings.history || []).length;
+    this.histToggleBtn.setAttribute("aria-label", `翻译历史（${n} 条）`);
+    this.histToggleBtn.style.opacity = n ? "1" : "0.45";
+  }
+  toggleHistory() {
+    this.histOpen = !this.histOpen;
+    if (this.histOpen) this.renderHistory();
+    else this.histListEl.hide();
+  }
+  renderHistory() {
+    const list = this.plugin.settings.history || [];
+    this.histListEl.empty();
+    this.histListEl.show();
+    this.refreshHistoryCount();
+    if (!list.length) {
+      this.histListEl.createDiv({
+        cls: "mini-empty",
+        text: "还没有翻译记录",
+      });
+      return;
+    }
+    for (let i = 0; i < list.length; i++) {
+      const h = list[i];
+      const item = this.histListEl.createDiv({ cls: "mini-hist-item" });
+      const head = item.createDiv({ cls: "mini-hist-head" });
+      head.createSpan({
+        cls: "mini-hist-src",
+        text: `${fmtHistTime(h.ts)} · ${h.via}`,
+        attr: { title: `翻译源：${h.via}` },
+      });
+      // 详情小图标：展开 文件/页码 来源信息（不常驻）
+      const info = head.createEl("span", {
+        cls: "mini-icon-btn",
+        attr: { title: "来源详情" },
+      });
+      setIcon(info, "file-text");
+      const del = head.createEl("span", {
+        cls: "mini-icon-btn",
+        attr: { title: "删除这条记录" },
+      });
+      setIcon(del, "x");
+      const preview = item.createDiv({ cls: "mini-hist-prev" });
+      const firstZh = (h.pairs && h.pairs[0] && h.pairs[0].zh) || "";
+      preview.setText(firstZh.replace(/\n/g, " ").slice(0, 60));
+      const detail = item.createDiv({ cls: "mini-hist-detail" });
+      detail.style.display = "none";
+      const lines = [`时间：${new Date(h.ts).toLocaleString()}`];
+      if (h.file) lines.push(`文件：${h.file}`);
+      if (h.page) lines.push(`页码：第 ${h.page} 页`);
+      if (!h.file && !h.page) lines.push("（无文件来源记录）");
+      detail.setText(lines.join("\n"));
+      info.onclick = (ev) => {
+        ev.stopPropagation();
+        detail.style.display =
+          detail.style.display === "none" ? "" : "none";
+      };
+      del.onclick = async (ev) => {
+        ev.stopPropagation();
+        const arr = this.plugin.settings.history || [];
+        arr.splice(i, 1);
+        await this.plugin.saveData(this.plugin.settings);
+        this.renderHistory();
+      };
+      item.onclick = () => {
+        this.show(h.pairs, `${h.via} · 历史`);
+        new Notice("已载入该条记录", 1200);
+      };
+    }
+  }
+  onClose() {
+    // 面板关闭即退订，避免监听器堆积指向已销毁的 DOM
+    if (this.unsubSources) this.unsubSources();
+    this.unsubSources = null;
+  }
 }
 
 // ---------- 设置页 ----------
@@ -955,6 +2355,18 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
+    // 订阅中枢：面板/管理弹窗里改了源或选中状态，设置页的下拉立即跟随（实时）
+    this.unsubSources = onSourcesSync(() => {
+      const s = plugin.settings;
+      const resync = (dd, val, options) => {
+        if (!dd) return;
+        dd.selectEl.empty();
+        for (const n of options) dd.addOption(n, n);
+        dd.setValue(val);
+      };
+      resync(this.ddPrimary, s.primarySource, engineOptions());
+      resync(this.ddDict, s.dictSource, dictOptions());
+    });
   }
   display() {
     const { containerEl } = this;
@@ -963,6 +2375,7 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
       .setName("主翻译源（句子）")
       .setDesc("内置免费源 + 你配置的大模型源。谷歌需代理，国内直连不通；大模型源失败不回退免费源")
       .addDropdown((dd) => {
+        this.ddPrimary = dd; // 挂到实例上，中枢同步时按最新引用重建
         for (const n of engineOptions()) dd.addOption(n, n);
         dd.setValue(this.plugin.settings.primarySource).onChange(async (v) => {
           this.plugin.settings.primarySource = v;
@@ -975,6 +2388,7 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
       .setName("词典源（单词）")
       .setDesc("内置词典 + 大模型配置。牛津为英英释义；有道含中文音标释义；大模型配置给出学术语境义")
       .addDropdown((dd) => {
+        this.ddDict = dd;
         for (const d of dictOptions()) dd.addOption(d, d);
         dd.setValue(this.plugin.settings.dictSource).onChange(async (v) => {
           this.plugin.settings.dictSource = v;
@@ -1086,6 +2500,21 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
             await this.plugin.saveData(this.plugin.settings);
           })
       );
+
+    containerEl.createEl("h3", { text: "全文翻译" });
+    new Setting(containerEl)
+      .setName("输出形式")
+      .setDesc("双语对照：每块译文前附英文原文引用块，便于核对公式还原；纯译文：只保留中文")
+      .addDropdown((dd) =>
+        dd
+          .addOption("bilingual", "双语对照")
+          .addOption("zh", "纯译文")
+          .setValue(this.plugin.settings.fullMode || "bilingual")
+          .onChange(async (v) => {
+            this.plugin.settings.fullMode = v;
+            await this.plugin.saveData(this.plugin.settings);
+          })
+      );
   }
 }
 
@@ -1097,6 +2526,8 @@ module.exports = class MiniTranslator extends Plugin {
         dictSource: "百度",
         autoTranslate: false,
         autoTranslateDelay: 2,
+        fullMode: "bilingual",
+        history: [],
         llmProfiles: [],
         activeProfile: 0,
       },
@@ -1166,6 +2597,22 @@ module.exports = class MiniTranslator extends Plugin {
     }
     this.addSettingTab(new MiniTranslatorSettingTab(this.app, this));
 
+    // 全文翻译进度：状态栏显示，点击取消（Notice 放不了按钮）
+    this.resetFtCancel();
+    this.ftStatusItem = this.addStatusBarItem();
+    this.ftStatusItem.style.cursor = "pointer";
+    this.ftStatusItem.hide();
+    this.ftStatusItem.onclick = () => {
+      this.requestFtCancel();
+      new Notice("已请求取消：在途请求立即失效，正在停止", 3000);
+    };
+    // 中枢钩子：任何界面调 saveData 落盘即广播，所有源相关 UI 实时同步（含选中状态）
+    const origSaveData = this.saveData.bind(this);
+    this.saveData = async (data) => {
+      await origSaveData(data);
+      broadcastSources("save");
+    };
+
     this.addCommand({
       id: "translate-selection",
       name: "翻译选中文本（逐句）",
@@ -1229,6 +2676,43 @@ module.exports = class MiniTranslator extends Plugin {
     });
 
     this.addCommand({
+      id: "math-selftest",
+      name: "测试公式渲染",
+      callback: () => {
+        const modal = new Modal(this.app);
+        modal.contentEl.createEl("h3", { text: "LaTeX 渲染自检" });
+        const note = modal.contentEl.createDiv();
+        note.style.fontSize = "var(--font-smaller)";
+        note.style.color = "var(--text-muted)";
+        note.style.lineHeight = "1.6";
+        note.style.marginBottom = "10px";
+        note.appendText(
+          "若下面四条公式显示为数学符号而不是 $..$ 源码，说明渲染管线正常；此时划论文仍不渲染，是因为 PDF 选中的文本本身不含完整 LaTeX（免费源无法恢复）——请换用大模型翻译源。"
+        );
+        const flow = modal.contentEl.createDiv();
+        renderPairsTo(flow, [
+          {
+            en: "Bayes' rule gives $p(\\theta \\mid x) \\propto p(x \\mid \\theta)p(\\theta)$ and \\(E = mc^2\\) holds.",
+            zh: "由贝叶斯公式可得 $p(\\theta \\mid x) \\propto p(x \\mid \\theta)p(\\theta)$；能量满足 $$E = mc^2$$；并有 \\[\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}\\] 成立。",
+          },
+        ]);
+        modal.open();
+      },
+    });
+
+    this.addCommand({
+      id: "translate-full-pdf",
+      name: "全文翻译当前 PDF",
+      callback: () => this.fullTranslateFlow(),
+    });
+
+    this.addCommand({
+      id: "translate-full-pick",
+      name: "全文翻译：选择文件（可多选）",
+      callback: () => new FilePickTranslateModal(this.app, this).open(),
+    });
+
+    this.addCommand({
       id: "diagnose",
       name: "诊断环境",
       callback: () => this.diagnose(),
@@ -1240,15 +2724,30 @@ module.exports = class MiniTranslator extends Plugin {
     );
   }
 
+  // ---------- 全文翻译取消中枢：requestFtCancel 通过 Promise.race 立即失效在途请求 ----------
+  // （requestUrl 不支持 AbortController，用竞速让 await 处马上返回，底层请求自然被丢弃）
+  requestFtCancel() {
+    this.ftCancel = true;
+    if (this._ftCancelResolve) this._ftCancelResolve();
+  }
+
+  resetFtCancel() {
+    this.ftCancel = false;
+    this.ftCancelPromise = new Promise((res) => {
+      this._ftCancelResolve = res;
+    });
+  }
+
   onunload() {
     this.closePopup();
     if (this.dwellTimer) clearTimeout(this.dwellTimer);
+    SOURCE_SYNC_LISTENERS.clear(); // 禁用插件时清空中枢订阅
   }
 
   // 设置/配置变更后通知面板立即刷新（选项重建 + 当前值同步），并清空翻译缓存
   refreshPanel() {
-    CACHE.clear();
-    if (this.panelView) this.panelView.syncSource();
+    CACHE.clear(); // 换源/改配置后不喂旧缓存
+    broadcastSources("refresh");
   }
 
   onSelectionChanged() {
@@ -1360,6 +2859,15 @@ module.exports = class MiniTranslator extends Plugin {
     header.createSpan({
       text: pending ? "翻译中…" : via ? `翻译 · ${via}` : "Mini Translator",
     });
+    const copyBtn = header.createSpan({ text: "复制" });
+    copyBtn.style.cursor = "pointer";
+    copyBtn.style.marginLeft = "auto";
+    copyBtn.onclick = async () => {
+      if (this.lastPopupText) {
+        await navigator.clipboard.writeText(this.lastPopupText);
+        new Notice("已复制", 1500);
+      }
+    };
     // 拖动：按住头部任意空白处移动
     header.style.cursor = "move";
     header.style.userSelect = "none";
@@ -1439,6 +2947,7 @@ module.exports = class MiniTranslator extends Plugin {
       labelSpan.textContent = via ? `翻译 · ${via}` : "Mini Translator";
     }
     this.pendingLabel = null;
+    this.lastPopupText = pairs.map((p) => p.en + "\n" + p.zh).join("\n\n");
     renderPairsTo(this.popupBodyEl, pairs);
   }
 
@@ -1571,12 +3080,16 @@ module.exports = class MiniTranslator extends Plugin {
       new Notice("没有拿到选中的文本：请在笔记或 PDF 里先选中文本再按快捷键", 6000);
       return;
     }
+    // 源文本规范化：清不可见字符 + 把 Unicode 数学子/上标字母还原为 ASCII
+    text = demathify(cleanInvisibles(text));
     // 立刻弹窗（等待动画），结果到了原地填充
     const px = x != null ? x : window.innerWidth - 520;
     const py = y != null ? y : 80;
     this.showPopup("", px, py, null, true);
     const t0 = Date.now();
     try {
+      // 公式重建已合并进 TRANSLATE_PROMPT：大模型源在翻译的同一次请求里恢复破损数学，
+      // 无需单独的预处理请求
       const pairs = [];
       let via = "";
       // 数据层统一重排版：词典保留每词性一行；句子/段落译文重排为自然段落
@@ -1620,9 +3133,429 @@ module.exports = class MiniTranslator extends Plugin {
         this.panelView.show(pairs, meta);
       }
       this.updatePopupPairs(pairs, via);
+      // 历史记录：附上来源（哪个文件、PDF 第几页 / 笔记名）
+      let hFile = "";
+      let hPage = null;
+      if (mdView && mdView.file) {
+        hFile = mdView.file.basename;
+      } else {
+        try {
+          const loc = await this.locatePdfDoc();
+          if (loc) {
+            hFile = loc.leaf.view.file ? loc.leaf.view.file.name : "";
+            hPage = loc.page || null;
+          }
+        } catch (e) {}
+      }
+      this.pushHistory(pairs, via, hFile, hPage);
       console.log("[mini-translator] 耗时", Date.now() - t0, "ms | 源:", via);
     } catch (e) {
       this.failPopup(e.message || String(e));
     }
+  }
+
+  // ---------- 全文翻译当前 PDF ----------
+  // 定位已打开 PDF 的 pdf.js 文档对象。
+  // Obsidian 1.8+ 官方内部链：view.viewer.child.pdfViewer（原型为 window.pdfjsViewer.PDFViewerApplication，
+  // 参考 RyotaUshio/obsidian-pdf-plus 的 typings 与 patchers）；文档未加载完时等待其 pdfLoadingTask
+  async locatePdfDoc() {
+    const isPdf = (l) =>
+      l && l.view && l.view.getViewType && l.view.getViewType() === "pdf";
+    let leaf = this.app.workspace.getMostRecentLeaf();
+    if (!isPdf(leaf)) leaf = this.app.workspace.getLeavesOfType("pdf")[0];
+    if (!isPdf(leaf)) return null;
+    // 策略1：官方内部链（1.8+；旧版本里 child 本身就是 viewer 实例）
+    try {
+      const child = leaf.view.viewer && leaf.view.viewer.child;
+      const pv = child && (child.pdfViewer || child);
+      if (pv) {
+        if (pv.pdfDocument) {
+          return { doc: pv.pdfDocument, page: pv.currentPageNumber || null, leaf };
+        }
+        if (pv.pdfLoadingTask && pv.pdfLoadingTask.promise) {
+          const doc = await pv.pdfLoadingTask.promise;
+          return { doc, page: pv.currentPageNumber || null, leaf };
+        }
+      }
+    } catch (e) {}
+    // 策略2：旧全局名兜底（历史结构）
+    const tryApp = (win) => {
+      try {
+        const app = win && win.PDFViewerApplication;
+        if (!app) return null;
+        const doc =
+          app.pdfDocument || (app.pdfViewer && app.pdfViewer.pdfDocument);
+        return doc ? { doc, page: app.page || null } : null;
+      } catch (e) {
+        return null;
+      }
+    };
+    for (const fr of Array.from(leaf.view.containerEl.querySelectorAll("iframe"))) {
+      const hit = tryApp(fr.contentWindow);
+      if (hit) return { doc: hit.doc, page: hit.page, leaf };
+    }
+    for (let i = 0; i < window.frames.length; i++) {
+      const hit = tryApp(window.frames[i]);
+      if (hit) return { doc: hit.doc, page: hit.page, leaf };
+    }
+    const hit3 = tryApp(window);
+    if (hit3) return { doc: hit3.doc, page: hit3.page, leaf };
+    return null;
+  }
+
+  // ---------- 翻译历史：带来源（源名 + 文件 + 页码），持久化到 data.json，上限 50 条 ----------
+  async pushHistory(pairs, via, file, page) {
+    try {
+      if (!Array.isArray(this.settings.history)) this.settings.history = [];
+      const h = this.settings.history;
+      const sig = pairs.map((p) => p.en + "|" + p.zh).join("|");
+      if (h.length && h[0].sig === sig) return; // 连续重复不记
+      h.unshift({
+        ts: Date.now(),
+        via,
+        pairs,
+        sig,
+        file: file || "",
+        page: page || null,
+      });
+      if (h.length > 50) h.length = 50;
+      await this.saveData(this.settings);
+      if (this.panelView) this.panelView.refreshHistoryCount();
+    } catch (e) {
+      console.warn("[mini-translator] 历史保存失败:", e);
+    }
+  }
+
+  setFullTranslateStatus(text) {
+    if (!this.ftStatusItem) return;
+    this.ftStatusItem.setText(text);
+    this.ftStatusItem.show();
+  }
+
+  clearFullTranslateStatus() {
+    if (this.ftStatusItem) this.ftStatusItem.hide();
+  }
+
+  // 全文翻译仅支持大模型源：分批协议 + LaTeX 重建都依赖大模型能力，免费源无法胜任
+  ensureLlmForFull() {
+    if (findProfile(this.settings.primarySource)) return true;
+    new Notice(
+      "全文翻译只支持大模型源：请先在设置里添加并选中一个大模型配置",
+      8000
+    );
+    return false;
+  }
+
+  async fullTranslateFlow() {
+    if (!this.ensureLlmForFull()) return;
+    const loc = await this.locatePdfDoc();
+    if (!loc) {
+      new Notice(
+        "没有找到已打开的 PDF：请先在 Obsidian 里打开要翻译的 PDF（或用「全文翻译：选择文件」直接选文件）",
+        6000
+      );
+      return;
+    }
+    const doc = loc.doc;
+    const file = loc.leaf.view.file;
+    new Notice("正在提取 PDF 文本…", 3000);
+    let blocks = [];
+    try {
+      const r = await extractDocBlocks(doc, (i, n) =>
+        this.setFullTranslateStatus(`MT 提取 ${i}/${n}`)
+      );
+      blocks = r.blocks;
+    } catch (e) {
+      this.clearFullTranslateStatus();
+      new Notice(`提取 PDF 文本失败：${e.message}`, 8000);
+      return;
+    }
+    this.clearFullTranslateStatus();
+    if (this.ftCancel) {
+      this.resetFtCancel();
+      new Notice("已取消", 2000);
+      return;
+    }
+    const transChars = blocks.reduce((n, b) => n + b.text.length, 0);
+    if (!transChars) {
+      new Notice(
+        "这份 PDF 没有可提取的文本层（可能是扫描件）。扫描件需要 OCR，暂不支持",
+        8000
+      );
+      return;
+    }
+    const info = this.buildDocInfo(file || { name: "未知文件", path: "" }, blocks);
+    info.doc = doc;
+    info.blocks = blocks;
+    new FullTranslateModal(this.app, this, info).open();
+  }
+
+  // 从块结构构建任务信息（当前 PDF 与多选弹窗共用）：批次划分、token/耗时估算
+  // （全文翻译为大模型源专用，全部块都进管线；isSkippableBlock 只影响 HTML 白块覆盖决策）
+  buildDocInfo(file, blocks) {
+    const batches = groupIntoBatches(blocks);
+    let chars = 0;
+    for (const b of blocks) chars += b.text.length;
+    const prof = findProfile(this.settings.primarySource);
+    const pages = blocks.reduce((m, b) => Math.max(m, b.page), 0);
+    return {
+      fileName: file.name,
+      pdfPath: file.path,
+      pages,
+      chars,
+      transN: blocks.length,
+      chunks: batches.length,
+      source:
+        this.settings.primarySource +
+        (prof && prof.activeModel ? `（${prof.activeModel}）` : ""),
+      eta: `约 ${Math.max(1, Math.ceil((batches.length * 3.5) / 60))} 分钟`,
+      tokensEst: estTokens(chars),
+      bilingual: this.settings.fullMode !== "zh",
+    };
+  }
+
+  // ---------- 进度窗控制（应用内弹窗版） ----------
+  ensureProg() {
+    if (!this.progModal) new TranslateProgressModal(this.app, this).open();
+    return this.progModal;
+  }
+
+  progUpdate(st) {
+    if (this.progModal) this.progModal.update(st);
+  }
+
+  endProg() {
+    if (this.progModal) this.progModal.finish();
+  }
+
+  // 多选批量全文翻译：逐份顺序执行，中途可取消，只打开最后一份结果
+  async runPickedTranslate(jobs) {
+    if (!this.ensureLlmForFull()) return;
+    let ok = 0;
+    this.ensureProg();
+    for (let i = 0; i < jobs.length; i++) {
+      if (this.ftCancel) break;
+      const job = jobs[i];
+      const tag = `[${i + 1}/${jobs.length}] ${job.file.name}`;
+      try {
+        let doc = job.doc || null;
+        let blocks = job.blocks || null;
+        if (!doc) doc = (await getPdfDocForFile(this, job.file)).doc;
+        if (!blocks) {
+          const r = await extractDocBlocks(doc, (p, n) =>
+            this.progUpdate({ fileTag: tag, phase: "提取文本", done: p, total: n })
+          );
+          blocks = r.blocks;
+        }
+        const info = this.buildDocInfo(job.file, blocks);
+        if (!info.chars) throw new Error("扫描件无文本层");
+        info.doc = doc;
+        info.blocks = blocks;
+        info.openResult = i === jobs.length - 1; // 批量时只打开最后一个结果
+        info.batchLabel = `${i + 1}/${jobs.length}`;
+        const cancelled = await this.runFullTranslate(info);
+        ok++;
+        if (cancelled) {
+          new Notice("批量全文翻译已取消", 3000);
+          break;
+        }
+      } catch (e) {
+        new Notice(`「${job.file.name}」失败：${e.message || e}`, 6000);
+      }
+    }
+    this.endProg();
+    if (jobs.length > 1)
+      new Notice(`批量全文翻译完成：成功 ${ok}/${jobs.length} 份`, 5000);
+    this.resetFtCancel();
+  }
+
+  async runFullTranslate(info) {
+    const base = info.fileName.replace(/\.pdf$/i, "");
+    const dir = info.pdfPath.includes("/")
+      ? info.pdfPath.slice(0, info.pdfPath.lastIndexOf("/"))
+      : "";
+    const join = (name) => `${dir ? dir + "/" : ""}${name}`;
+    let path = join(`${base}·翻译.md`);
+    for (let n = 2; await this.app.vault.adapter.exists(path); n++) {
+      path = join(`${base}·翻译 ${n}.md`);
+    }
+    let htmlPath = join(`${base}·翻译.html`);
+    for (let n = 2; await this.app.vault.adapter.exists(htmlPath); n++) {
+      htmlPath = join(`${base}·翻译 ${n}.html`);
+    }
+    this.resetFtCancel();
+    const t0 = Date.now();
+    const d = new Date();
+    const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    this.ensureProg();
+    const fileTag = `${info.batchLabel ? "[" + info.batchLabel + "] " : ""}${info.fileName}`;
+
+    // 阶段1：批量翻译（逐块缓存，批解析失败自动降级）
+    let results = null;
+    try {
+      const r = await translateBlocksAll(this, info.blocks, this.settings.primarySource, (st) =>
+        this.progUpdate({ ...st, fileTag })
+      );
+      results = r.results;
+    } catch (e) {
+      this.endProg();
+      new Notice(`全文翻译失败：${e.message || e}`, 8000);
+      this.resetFtCancel();
+      return false;
+    }
+
+    // 取消后快速收尾：跳过页面渲染与结果打开，只写部分 md（已翻部分有缓存，重跑秒回）
+    const wasCancelled = !!this.ftCancel;
+
+    // 阶段2：整页渲染成 JPEG（图表/公式像素原样保留）
+    let pageImgs = [];
+    if (info.doc && !wasCancelled) {
+      try {
+        pageImgs = await renderPageImages(
+          this,
+          info.doc,
+          1.5,
+          0.9,
+          (i, n) => this.progUpdate({ fileTag, phase: "渲染页面", done: i, total: n })
+        );
+      } catch (e) {
+        new Notice(`页面渲染失败（跳过原版式 HTML）：${e.message}`, 5000);
+      }
+    }
+
+    // 阶段3：装配 Markdown 笔记 + 原版式复刻 HTML
+    this.progUpdate({ fileTag, phase: "写入文件", done: 0, total: 1 });
+    let md =
+      "---\n" +
+      `title: "${base} 全文翻译"\n` +
+      "type: full-translation\n" +
+      `source_file: "${info.pdfPath}"\n` +
+      `translated_with: "${info.source}"\n` +
+      `created: ${ymd}\n` +
+      "---\n\n" +
+      `# ${base} 全文翻译\n\n` +
+      `> 由 Mini Translator 生成（${info.source}）。全部文本块（含公式密集块）经大模型重建：英文为修复重建版（公式 → LaTeX），公式统一转为 Obsidian 可渲染的 $/$$ 定界符，可能有误，请对照原版式 HTML 或下方页图核对。同目录还有「${base}·翻译.html」原版式对照版。\n`;
+
+    // 页面图片附件（≤30 页才写盘嵌入，避免超长文献撑爆库）
+    const imgDir = join(`${base}·翻译页`);
+    const embedPages = pageImgs.length > 0 && info.pages <= 30;
+    if (embedPages) {
+      try {
+        if (!this.app.vault.getAbstractFileByPath(imgDir))
+          await this.app.vault.createFolder(imgDir);
+      } catch (e) {}
+    }
+
+    const blocksByPage = new Map();
+    info.blocks.forEach((b, i) => {
+      if (!blocksByPage.has(b.page)) blocksByPage.set(b.page, []);
+      blocksByPage.get(b.page).push(i);
+    });
+
+    let failures = [];
+    let doneBlocks = 0;
+    for (let p = 1; p <= info.pages; p++) {
+      md += `\n## 第 ${p} 页\n\n`;
+      if (embedPages && pageImgs[p - 1]) {
+        const ipath = `${imgDir}/page-${p}.jpg`;
+        try {
+          await this.app.vault.adapter.writeBinary(
+            ipath,
+            dataUrlToBuffer(pageImgs[p - 1].dataUrl)
+          );
+          md += `> [!info]- 第 ${p} 页原图\n> ![[${ipath}]]\n\n`;
+        } catch (e) {}
+      }
+      const idxs = blocksByPage.get(p) || [];
+      for (const gi of idxs) {
+        const b = info.blocks[gi];
+        const res = results[gi];
+        if (!res || !res.zh) continue; // 取消时未翻到的块跳过
+        if (res.zh.startsWith("⚠️")) failures.push(gi + 1);
+        if (info.bilingual) {
+          // 模型输出可能带 \( \)/\[ \] 定界符（Obsidian 不渲染），统一归一为 $/$$
+          const enFixed = normalizeMathDelims(typofixEn(res.en || b.text));
+          md +=
+            enFixed
+              .split("\n")
+              .map((l) => (l.trim() ? "> " + l : ">"))
+              .join("\n") + "\n>\n";
+        }
+        // 先归一定界符再重排：转换出的 $$…$$ 会被 mapMath 保护，内部换行不被折叠
+        md += reflowZh(normalizeMathDelims(res.zh)) + "\n\n";
+        doneBlocks++;
+      }
+    }
+
+    const wasCancelledFlag = results.some((r, i) => !r);
+    if (this.ftCancel || wasCancelledFlag) {
+      md += `\n> [!note] 已取消（完成 ${doneBlocks}/${info.transN} 块；重新运行会复用缓存，已翻过的部分秒回）\n`;
+    }
+    md += `\n---\n\n*共 ${info.pages} 页 · ${doneBlocks}/${info.transN} 块 · 耗时 ${Math.round((Date.now() - t0) / 1000)} 秒${failures.length ? ` · 失败块：第 ${failures.join("、")} 块` : ""}*\n`;
+    await this.app.vault.adapter.write(path, md);
+
+    // 原版式复刻 HTML：页面图打底 + 白块覆盖中文译文
+    if (pageImgs.length) {
+      try {
+        const pages = pageImgs.map((img, pi2) => {
+          const blks = [];
+          for (const gi of blocksByPage.get(pi2 + 1) || []) {
+            const b = info.blocks[gi];
+            const res = results[gi] || { en: "", zh: "" };
+            const bad = isSkippableBlock(b) || !res.zh || res.zh.startsWith("⚠️");
+            blks.push({
+              skip: bad,
+              orig: b.text,
+              en: res.en,
+              zh: bad ? "" : res.zh,
+              rect: blockRectPct(b, img.vp, img.w, img.h),
+            });
+          }
+          return { img: img.dataUrl, blocks: blks };
+        });
+        const html = buildReplicaHtml(
+          { title: `${base} 全文翻译`, source: info.source },
+          pages
+        );
+        await this.app.vault.adapter.write(htmlPath, html);
+      } catch (e) {
+        new Notice(`原版式 HTML 生成失败：${e.message}`, 6000);
+      }
+    }
+
+    // 取消时删除本次生成的产物（Markdown / HTML / 页图目录），保持 vault 干净
+    const cancelled = wasCancelled || wasCancelledFlag || this.ftCancel;
+    if (cancelled) {
+      try { await this.app.vault.adapter.remove(path); } catch (e) {}
+      try { await this.app.vault.adapter.remove(htmlPath); } catch (e) {}
+      try {
+        if (await this.app.vault.adapter.exists(imgDir))
+          await this.app.vault.adapter.rmdir(imgDir, true);
+      } catch (e) {}
+    }
+
+    this.clearFullTranslateStatus();
+    const af = this.app.vault.getAbstractFileByPath(path);
+    // 取消时不打开结果（且产物已删除）
+    if (af && info.openResult !== false && !cancelled)
+      await this.app.workspace.getLeaf("tab").openFile(af);
+    this.resetFtCancel();
+    this.endProg();
+    // 原版式 HTML 用系统浏览器打开（打印即得同版式 PDF）
+    if (info.openResult !== false && pageImgs.length && !cancelled) {
+      try {
+        const abs = this.app.vault.adapter.getFullPath(htmlPath);
+        shell.openPath(abs);
+      } catch (e) {}
+    }
+    new Notice(
+      cancelled
+        ? "全文翻译已取消（产物已清理）"
+        : failures.length
+          ? `全文翻译完成，但有 ${failures.length} 块失败（见笔记末尾）`
+          : "全文翻译完成（Markdown + 原版式 HTML）",
+      6000
+    );
+    return cancelled; // 告诉批量调用方要不要继续下一份
   }
 };

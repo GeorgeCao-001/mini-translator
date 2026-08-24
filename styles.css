@@ -50,7 +50,7 @@
   flex-direction: column;
 }
 
-/* 英文原文：衬线字体、两端对齐（英文排版规范，段首不缩进） */
+/* 英文原文：衬线字体、两端对齐（英文排版规范，段首不缩进）；可光标选中复制 */
 .mini-en-line {
   font-family: Georgia, "Times New Roman", "Songti SC", serif;
   font-size: var(--font-smaller);
@@ -59,9 +59,10 @@
   margin-bottom: 6px;
   text-align: justify;
   white-space: pre-wrap;
+  user-select: text;
 }
 
-/* 中文文本规范：段首缩进两字符；词典释义是条目式，不缩进 */
+/* 中文文本规范：段首缩进两字符；词典释义是条目式，不缩进；可光标选中复制 */
 .mini-zh-line {
   font-size: var(--font-text-size);
   color: var(--text-normal);
@@ -69,6 +70,7 @@
   margin-bottom: 12px;
   text-indent: 2em;
   white-space: pre-wrap;
+  user-select: text;
 }
 
 .mini-dict-line {
@@ -78,6 +80,7 @@
   margin-bottom: 12px;
   text-indent: 0;
   white-space: pre-wrap;
+  user-select: text;
 }
 
 .mini-zh-line:last-child {
@@ -99,4 +102,225 @@
   line-height: 1.9;
   padding: 0 8px;
   white-space: pre-wrap;
+}
+
+/* ---------- 翻译历史：默认收起，时钟图标展开；文件/页码藏详情 ---------- */
+.mini-hist-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mini-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+}
+
+.mini-icon-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mini-hist-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mini-hist-item {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mini-hist-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mini-hist-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+}
+
+.mini-hist-head .mini-hist-src {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-hist-item .mini-icon-btn {
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.mini-hist-item .mini-icon-btn:hover {
+  opacity: 1;
+}
+
+.mini-hist-prev {
+  font-size: var(--font-smaller);
+  color: var(--text-normal);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-hist-detail {
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--background-modifier-border);
+  font-size: var(--font-smaller);
+  color: var(--text-faint);
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+/* ---------- 多选全文翻译弹窗 ---------- */
+.mini-pick-summary {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  line-height: 1.6;
+}
+
+.mini-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mini-pick-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mini-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-smaller);
+}
+
+.mini-pick-stat {
+  flex-shrink: 0;
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ---------- 全文翻译进度窗（应用内弹窗版） ---------- */
+.mini-prog-modal {
+  min-width: 360px;
+  max-width: 480px;
+}
+.mini-prog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  cursor: move;
+  user-select: none;
+}
+.mini-prog-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-accent);
+  animation: mini-prog-pulse 1.2s ease-in-out infinite;
+}
+.mini-prog-phase {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.mini-prog-detail {
+  color: var(--text-muted);
+  font-size: 12px;
+  min-height: 16px;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+.mini-prog-bar {
+  height: 10px;
+  border-radius: 6px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+  position: relative;
+}
+.mini-prog-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--text-accent), var(--text-accent-hover));
+  transition: width 0.4s ease;
+  position: relative;
+  overflow: hidden;
+}
+.mini-prog-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  animation: mini-prog-shine 1.6s linear infinite;
+}
+.mini-prog-pct {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+  margin-top: 4px;
+}
+.mini-prog-indet .mini-prog-fill {
+  width: 35% !important;
+  animation: mini-prog-slide 1.4s ease-in-out infinite;
+}
+.mini-prog-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  min-height: 16px;
+}
+.mini-prog-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+@keyframes mini-prog-shine {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+@keyframes mini-prog-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(320%); }
+}
+@keyframes mini-prog-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
