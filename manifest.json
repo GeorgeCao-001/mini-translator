@@ -1,7 +1,7 @@
 {
   "id": "mini-translator",
   "name": "Mini Translator",
-  "version": "3.0.19",
+  "version": "3.0.20",
   "minAppVersion": "1.5.0",
   "description": "零配置查词+整句翻译：有道/火山/腾讯免 Key 源，无需注册",
   "author": "George",
