@@ -1,4 +1,6 @@
-// Mini Translator v3.0.11 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.12 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.12：原版式 HTML 复刻改为可选（默认关）——关闭时跳过页面渲染/每页原图/HTML，
+//         只生成纯 Markdown 双语笔记，显著提速
 // v3.0.11：token/ETA 流式且不虚报——撤销乐观计数，token 显示值在模态框内每 120ms
 //         向真实消耗值平滑插值（落后真实）；心跳间隔 600ms→250ms
 // v3.0.10：进度/token/ETA 实时更新——token 一发出即计入（含在途），加 600ms 心跳
@@ -1494,7 +1496,9 @@ class FullTranslateModal extends Modal {
       `≈${fmtTok(this.info.tokensEst || 0)} tokens · 约 ${this.info.chunks} 次批量请求`,
       `预计耗时：${this.info.eta}`,
       `翻译源：${this.info.source}`,
-      `输出：Markdown 笔记 + 原版式 HTML（浏览器 Ctrl+P 即同版式 PDF）`,
+      this.plugin.settings.fullHtml
+        ? `输出：Markdown 笔记 + 原版式 HTML（浏览器 Ctrl+P 即同版式 PDF）`
+        : `输出：Markdown 双语笔记`,
     ]) {
       grid.createDiv({ text: l });
     }
@@ -2535,6 +2539,18 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
             await this.plugin.saveData(this.plugin.settings);
           })
       );
+
+    new Setting(containerEl)
+      .setName("原版式 HTML 复刻")
+      .setDesc("额外生成《文件名·翻译.html》（每页原图打底、中文按坐标覆盖，浏览器 Ctrl+P 打印成同版式 PDF），并在 Markdown 里嵌入每页原图。默认关闭，纯 Markdown 更快更稳")
+      .addToggle((tg) =>
+        tg
+          .setValue(!!this.plugin.settings.fullHtml)
+          .onChange(async (v) => {
+            this.plugin.settings.fullHtml = v;
+            await this.plugin.saveData(this.plugin.settings);
+          })
+      );
   }
 }
 
@@ -2547,6 +2563,7 @@ module.exports = class MiniTranslator extends Plugin {
         autoTranslate: false,
         autoTranslateDelay: 2,
         fullMode: "bilingual",
+        fullHtml: false, // 原版式 HTML 复刻：默认关（纯 Markdown 更快）
         history: [],
         llmProfiles: [],
         activeProfile: 0,
@@ -3429,7 +3446,7 @@ module.exports = class MiniTranslator extends Plugin {
 
     // 阶段2：整页渲染成 JPEG（图表/公式像素原样保留）
     let pageImgs = [];
-    if (info.doc && !wasCancelled) {
+    if (info.doc && !wasCancelled && this.settings.fullHtml) {
       try {
         pageImgs = await renderPageImages(
           this,
@@ -3454,7 +3471,9 @@ module.exports = class MiniTranslator extends Plugin {
       `created: ${ymd}\n` +
       "---\n\n" +
       `# ${base} 全文翻译\n\n` +
-      `> 由 Mini Translator 生成（${info.source}）。全部文本块（含公式密集块）经大模型重建：英文为修复重建版（公式 → LaTeX），公式统一转为 Obsidian 可渲染的 $/$$ 定界符，可能有误，请对照原版式 HTML 或下方页图核对。同目录还有「${base}·翻译.html」原版式对照版。\n`;
+      (this.settings.fullHtml
+        ? `> 由 Mini Translator 生成（${info.source}）。全部文本块（含公式密集块）经大模型重建：英文为修复重建版（公式 → LaTeX），公式统一转为 Obsidian 可渲染的 $/$$ 定界符，可能有误，请对照原版式 HTML 或下方页图核对。同目录还有「${base}·翻译.html」原版式对照版。\n`
+        : `> 由 Mini Translator 生成（${info.source}）。全部文本块经大模型重建：英文为修复重建版（公式 → LaTeX），公式统一转为 Obsidian 可渲染的 $/$$ 定界符，可能有误。\n`);
 
     // 页面图片附件（≤30 页才写盘嵌入，避免超长文献撑爆库）
     const imgDir = join(`${base}·翻译页`);
@@ -3573,7 +3592,9 @@ module.exports = class MiniTranslator extends Plugin {
         ? "全文翻译已取消（产物已清理）"
         : failures.length
           ? `全文翻译完成，但有 ${failures.length} 块失败（见笔记末尾）`
-          : "全文翻译完成（Markdown + 原版式 HTML）",
+          : this.settings.fullHtml
+            ? "全文翻译完成（Markdown + 原版式 HTML）"
+            : "全文翻译完成（Markdown）",
       6000
     );
     return cancelled; // 告诉批量调用方要不要继续下一份
