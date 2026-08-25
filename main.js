@@ -1,4 +1,6 @@
-// Mini Translator v3.0.15 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.16 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.16：悬浮球重做为极光渐变球——旋转锥形渐变内核 + 呼吸彩色光晕 + 3D 高光，
+//         外圈渐变细环画真实进度，去掉全部文字；隐藏 Modal 自带关闭按钮修复双 ✕
 // v3.0.15：修复最小化后 Obsidian 全屏点不动——根因是隐藏的弹窗遮罩层仍在拦截指针；
 //         最小化改为彻底拆除 Modal DOM 与键盘 scope（引擎状态留在实例上，悬浮球照常刷），
 //         点悬浮球时 open() 完整重建进度窗，状态无缝续上
@@ -1145,7 +1147,6 @@ class TranslateProgressModal extends Modal {
     this.minimized = false; // 最小化成悬浮球中（弹窗隐藏但翻译继续）
     this.orbEl = null; // 悬浮球元素
     this.orbBarEl = null; // 悬浮球 SVG 进度环
-    this.orbPctEl = null;
     this._cleanup = [];
     // 匀速爬动进度引擎状态
     this.disp = 0; // 当前显示进度 0..1（单调不减，每次最多 +1%）
@@ -1310,7 +1311,6 @@ class TranslateProgressModal extends Modal {
     if (this.metaEl) this.metaEl.setText(bits.join(" · "));
     // 悬浮球：圆环绘制进度 + hover 气泡数字；无总量（提取阶段）切到旋转弧线
     if (this.orbBarEl) this.orbBarEl.style.strokeDashoffset = String(100 - pct);
-    if (this.orbPctEl) this.orbPctEl.textContent = `${pct}%`;
     if (this.orbEl) this.orbEl.classList.toggle("indet", !st.total);
   }
 
@@ -1337,7 +1337,6 @@ class TranslateProgressModal extends Modal {
       this.orbEl.remove();
       this.orbEl = null;
       this.orbBarEl = null;
-      this.orbPctEl = null;
     }
     this.open(); // 重挂载 DOM 并重跑 onOpen（重建内容、定时器、拖动）
     this.paint();
@@ -1345,21 +1344,27 @@ class TranslateProgressModal extends Modal {
 
   buildOrb() {
     if (this.orbEl) return;
-    // 动态悬浮球：SVG 圆环进度 + 中心「译」字 + 呼吸光晕；hover 才弹出百分比气泡
+    // 极光球：旋转锥形渐变内核 + 模糊彩色光晕 + 3D 高光，外圈渐变细环画进度；
+    // 纯视觉无文字，点击弹回进度窗
     const orb = document.createElement("div");
     orb.className = "mini-prog-orb";
     orb.setAttribute("aria-label", "展开翻译进度");
     orb.innerHTML =
-      '<svg viewBox="0 0 36 36" aria-hidden="true">' +
-      '<circle class="mp-orb-track" cx="18" cy="18" r="15.9" pathLength="100"/>' +
-      '<circle class="mp-orb-bar" cx="18" cy="18" r="15.9" pathLength="100"' +
-      ' stroke-dasharray="100 100" stroke-dashoffset="100"/>' +
-      "</svg>" +
-      '<span class="mp-orb-glyph">译</span>' +
-      '<span class="mp-orb-pct">0%</span>';
+      '<div class="mp-orb-halo" aria-hidden="true"></div>' +
+      '<div class="mp-orb-core" aria-hidden="true"></div>' +
+      '<div class="mp-orb-gloss" aria-hidden="true"></div>' +
+      '<svg class="mp-orb-ring" viewBox="0 0 48 48" aria-hidden="true">' +
+      '<defs><linearGradient id="mp-ring-grad" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0" stop-color="#22d3ee"/>' +
+      '<stop offset="0.5" stop-color="#a78bfa"/>' +
+      '<stop offset="1" stop-color="#f472b6"/>' +
+      "</linearGradient></defs>" +
+      '<circle class="mp-orb-track" cx="24" cy="24" r="22.5" pathLength="100"/>' +
+      '<circle class="mp-orb-bar" cx="24" cy="24" r="22.5" pathLength="100"' +
+      ' stroke="url(#mp-ring-grad)" stroke-dasharray="100 100" stroke-dashoffset="100"/>' +
+      "</svg>";
     this.orbEl = orb;
     this.orbBarEl = orb.querySelector(".mp-orb-bar");
-    this.orbPctEl = orb.querySelector(".mp-orb-pct");
     // 拖动与点击并存：位移 <5px 视为点击（弹回），否则是拖到顺手的位置
     let sx = 0, sy = 0, ox = 0, oy = 0, moved = false;
     const mv = (e) => {
@@ -1400,7 +1405,6 @@ class TranslateProgressModal extends Modal {
         this.orbEl.remove();
         this.orbEl = null;
         this.orbBarEl = null;
-        this.orbPctEl = null;
       }
       for (const f of this._cleanup) f();
       this._cleanup = [];
@@ -1433,7 +1437,6 @@ class TranslateProgressModal extends Modal {
       this.orbEl.remove();
       this.orbEl = null;
       this.orbBarEl = null;
-      this.orbPctEl = null;
     }
     // 最小化触发的拆除只是暂时性的：保留 progModal 引用，恢复时继续复用本实例
     if (!this.minimized && this.plugin.progModal === this) {
