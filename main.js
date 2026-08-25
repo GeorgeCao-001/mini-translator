@@ -1,7 +1,9 @@
-// Mini Translator v3.0.20 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.21 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.21：彻底修双 ✕——放弃按 class 删/隐原生关闭按钮（其挂载点与命名随版本
+//         变化，两轮修复均漏网），改为删除自绘 ✕、直接复用原生按钮：点击走
+//         close() 未完成转最小化，行为不变，构造上只可能有一个 ✕
 // v3.0.20：悬浮球渐变对比拉满（40% 白混强调色 → 原色，90deg 纯左右），
-//         波动感三重化：渐变窗口漂移 + 上下轻浮 + 呼吸缩放；✕ 隐藏加 :has
-//         容器级兜底（原生按钮挂在 .modal 外层时后代选择器盖不到）
+//         波动感三重化：渐变窗口漂移 + 上下轻浮 + 呼吸缩放
 // v3.0.19：全文翻译完成后不再自动跳转到译文文件（不抢当前工作区焦点），
 //         产出路径改由完成通知给出
 // v3.0.18：进度窗只留一个 ✕——Obsidian 原生关闭按钮新版挂在 modal 外层导致 CSS
@@ -1173,22 +1175,17 @@ class TranslateProgressModal extends Modal {
 
   onOpen() {
     this.modalEl.addClass("mini-prog-modal");
-    // Obsidian 原生关闭按钮与标题栏 ✕ 重复；新版把它挂在 modal 外层
-    // （CSS 后代选择器盖不到），这里直接从容器里移除，位置无关、必定生效
-    this.containerEl
-      .querySelectorAll(".modal-close-button")
-      .forEach((el) => el.remove());
     const c = this.contentEl;
     c.empty();
 
     const head = c.createDiv("mini-prog-head");
     head.createSpan("mini-prog-dot");
     head.createSpan({ text: "全文翻译进度" });
-    // ✕ = 最小化成悬浮球（不取消翻译）；阻止 mousedown 冒泡以免触发标题栏拖动
-    const closeBtn = head.createEl("button", { cls: "mini-prog-close", text: "✕" });
-    closeBtn.setAttribute("aria-label", "最小化到悬浮球");
-    closeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-    closeBtn.onclick = () => this.minimize();
+    // 不再自绘 ✕：右上角只保留 Obsidian 原生关闭按钮。它的 class/挂载点随版本
+    // 变化，按 class 删除/隐藏始终有漏网之鱼（曾出现双 ✕）；而原生按钮的点击
+    // 走本类 close()——未完成时自动转为最小化成悬浮球，行为与自绘 ✕ 一致，
+    // 且构造上只可能有一个关闭按钮
+    // （原生按钮在 head 外部，不会触发标题栏拖动，无需 stopPropagation）
 
     this.phaseEl = c.createDiv("mini-prog-phase");
     this.phaseEl.setText("准备中…");

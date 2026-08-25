@@ -325,29 +325,8 @@
   50% { opacity: 0.35; }
 }
 
-/* 进度窗头部最小化按钮（✕ = 缩成悬浮球，不取消翻译） */
-.mini-prog-close {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: var(--radius-s);
-  cursor: pointer;
-}
-.mini-prog-close:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
-}
-/* 隐藏 Modal 原生关闭按钮（与标题栏最小化 ✕ 重复）。
-   新版 Obsidian 可能把它挂在 .modal 外层（containerEl 直属子级），
-   后代选择器盖不到——用 :has 从容器侧兜底，覆盖所有可能的挂载位置 */
-.mini-prog-modal .modal-close-button,
-.modal-container:has(.mini-prog-modal) .modal-close-button {
-  display: none !important;
-}
+/* 进度窗不再自绘 ✕：直接复用 Obsidian 原生关闭按钮（点击走 close() → 未完成转最小化），
+   构造上只有一个关闭按钮，杜绝双 ✕ */
 
 /* ---------- 悬浮球（v3.0.18）----------
    干净两色左右渐变内核 + 轻微波动（无旋转、无多彩光晕），
