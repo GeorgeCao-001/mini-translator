@@ -324,3 +324,114 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* 进度窗头部最小化按钮（✕ = 缩成悬浮球，不取消翻译） */
+.mini-prog-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+.mini-prog-close:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* 最小化悬浮球：SVG 圆环进度 + 呼吸光晕 + hover 百分比气泡，点击弹回进度窗 */
+.mini-prog-orb {
+  position: fixed;
+  z-index: 200;
+  width: 44px;
+  height: 44px;
+  right: 18px;
+  bottom: 64px;
+  border-radius: 50%;
+  cursor: grab;
+  user-select: none;
+  opacity: 0.9;
+  animation: mp-orb-breathe 2.4s ease-in-out infinite;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.mini-prog-orb:hover {
+  transform: scale(1.12);
+  opacity: 1;
+  animation-play-state: paused;
+}
+.mini-prog-orb:active {
+  cursor: grabbing;
+}
+@keyframes mp-orb-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--interactive-accent) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 9px color-mix(in srgb, var(--interactive-accent) 0%, transparent);
+  }
+}
+.mini-prog-orb svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  transform: rotate(-90deg);
+}
+.mp-orb-track {
+  fill: var(--background-primary);
+  stroke: var(--background-modifier-border);
+  stroke-width: 3;
+}
+.mp-orb-bar {
+  fill: none;
+  stroke: var(--interactive-accent);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.35s ease;
+}
+/* 提取阶段无总量：圆环变旋转弧线 */
+.mini-prog-orb.indet .mp-orb-bar {
+  stroke-dasharray: 28 72;
+  transition: none;
+  animation: mp-orb-spin 1.1s linear infinite;
+}
+@keyframes mp-orb-spin {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+.mp-orb-glyph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-normal);
+  pointer-events: none;
+}
+/* hover 时从左侧弹出百分比气泡（平时不显示数字） */
+.mp-orb-pct {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.mini-prog-orb:hover .mp-orb-pct {
+  opacity: 1;
+}

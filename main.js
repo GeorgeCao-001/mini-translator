@@ -1,4 +1,10 @@
-// Mini Translator v3.0.12 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.15 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.15：修复最小化后 Obsidian 全屏点不动——根因是隐藏的弹窗遮罩层仍在拦截指针；
+//         最小化改为彻底拆除 Modal DOM 与键盘 scope（引擎状态留在实例上，悬浮球照常刷），
+//         点悬浮球时 open() 完整重建进度窗，状态无缝续上
+// v3.0.14：悬浮球重设计——SVG 圆环进度（不显示数字）+ 呼吸光晕 + hover 百分比气泡，
+//         提取阶段自动切旋转弧线；缩小体积/降 z-index，减少对 Obsidian 的遮挡
+// v3.0.13：进度窗 ✕ / ESC / 点击外部 = 最小化成悬浮球（翻译继续跑），点击悬浮球弹回完整进度窗
 // v3.0.12：原版式 HTML 复刻改为可选（默认关）——关闭时跳过页面渲染/每页原图/HTML，
 //         只生成纯 Markdown 双语笔记，显著提速
 // v3.0.11：token/ETA 流式且不虚报——撤销乐观计数，token 显示值在模态框内每 120ms
@@ -1136,6 +1142,10 @@ class TranslateProgressModal extends Modal {
     this.plugin = plugin;
     this.plugin.progModal = this;
     this.finished = false; // 完成前屏蔽 ESC / 点击外部的关闭请求
+    this.minimized = false; // 最小化成悬浮球中（弹窗隐藏但翻译继续）
+    this.orbEl = null; // 悬浮球元素
+    this.orbBarEl = null; // 悬浮球 SVG 进度环
+    this.orbPctEl = null;
     this._cleanup = [];
     // 匀速爬动进度引擎状态
     this.disp = 0; // 当前显示进度 0..1（单调不减，每次最多 +1%）
@@ -1156,6 +1166,11 @@ class TranslateProgressModal extends Modal {
     const head = c.createDiv("mini-prog-head");
     head.createSpan("mini-prog-dot");
     head.createSpan({ text: "全文翻译进度" });
+    // ✕ = 最小化成悬浮球（不取消翻译）；阻止 mousedown 冒泡以免触发标题栏拖动
+    const closeBtn = head.createEl("button", { cls: "mini-prog-close", text: "✕" });
+    closeBtn.setAttribute("aria-label", "最小化到悬浮球");
+    closeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+    closeBtn.onclick = () => this.minimize();
 
     this.phaseEl = c.createDiv("mini-prog-phase");
     this.phaseEl.setText("准备中…");
@@ -1293,30 +1308,137 @@ class TranslateProgressModal extends Modal {
       );
     }
     if (this.metaEl) this.metaEl.setText(bits.join(" · "));
+    // 悬浮球：圆环绘制进度 + hover 气泡数字；无总量（提取阶段）切到旋转弧线
+    if (this.orbBarEl) this.orbBarEl.style.strokeDashoffset = String(100 - pct);
+    if (this.orbPctEl) this.orbPctEl.textContent = `${pct}%`;
+    if (this.orbEl) this.orbEl.classList.toggle("indet", !st.total);
   }
 
-  // 完成或取消后真正关闭；其余 close 请求（ESC/点外部）一律忽略
+  // ---------- 最小化成悬浮球 ----------
+  // 关键：不是把弹窗藏起来（display:none 的遮罩层仍可能拦截全屏点击），
+  // 而是彻底关闭 Modal、拆干净所有 DOM 与键盘 scope —— 引擎状态留在实例上，
+  // 恢复时 open() 完整重建。这样最小化期间 Obsidian 的任何位置都可正常点击。
+  minimize() {
+    if (this.minimized) return;
+    this.minimized = true;
+    for (const f of this._cleanup) f(); // 停动画定时器、摘拖动监听
+    this._cleanup = [];
+    this.finished = true; // 放行 super.close()
+    super.close(); // 彻底拆除弹窗 DOM（绕过本类 close() 的最小化守卫）
+    this.finished = false; // 恢复未完成标记：restore 后继续屏蔽 ESC/点外部误关
+    this.buildOrb();
+  }
+
+  // 点击悬浮球 → 弹回完整进度窗（重新构建，进度状态无缝续上）
+  restore() {
+    if (!this.minimized) return;
+    this.minimized = false;
+    if (this.orbEl) {
+      this.orbEl.remove();
+      this.orbEl = null;
+      this.orbBarEl = null;
+      this.orbPctEl = null;
+    }
+    this.open(); // 重挂载 DOM 并重跑 onOpen（重建内容、定时器、拖动）
+    this.paint();
+  }
+
+  buildOrb() {
+    if (this.orbEl) return;
+    // 动态悬浮球：SVG 圆环进度 + 中心「译」字 + 呼吸光晕；hover 才弹出百分比气泡
+    const orb = document.createElement("div");
+    orb.className = "mini-prog-orb";
+    orb.setAttribute("aria-label", "展开翻译进度");
+    orb.innerHTML =
+      '<svg viewBox="0 0 36 36" aria-hidden="true">' +
+      '<circle class="mp-orb-track" cx="18" cy="18" r="15.9" pathLength="100"/>' +
+      '<circle class="mp-orb-bar" cx="18" cy="18" r="15.9" pathLength="100"' +
+      ' stroke-dasharray="100 100" stroke-dashoffset="100"/>' +
+      "</svg>" +
+      '<span class="mp-orb-glyph">译</span>' +
+      '<span class="mp-orb-pct">0%</span>';
+    this.orbEl = orb;
+    this.orbBarEl = orb.querySelector(".mp-orb-bar");
+    this.orbPctEl = orb.querySelector(".mp-orb-pct");
+    // 拖动与点击并存：位移 <5px 视为点击（弹回），否则是拖到顺手的位置
+    let sx = 0, sy = 0, ox = 0, oy = 0, moved = false;
+    const mv = (e) => {
+      if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 5) moved = true;
+      if (!moved) return;
+      orb.style.left = `${ox + e.clientX - sx}px`;
+      orb.style.top = `${oy + e.clientY - sy}px`;
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", mv);
+      window.removeEventListener("mouseup", up);
+      if (!moved && this.minimized) this.restore();
+    };
+    orb.addEventListener("mousedown", (e) => {
+      const r = orb.getBoundingClientRect();
+      ox = r.left;
+      oy = r.top;
+      sx = e.clientX;
+      sy = e.clientY;
+      moved = false;
+      e.preventDefault();
+      window.addEventListener("mousemove", mv);
+      window.addEventListener("mouseup", up);
+    });
+    document.body.appendChild(orb);
+    this._cleanup.push(() => {
+      orb.remove();
+    });
+  }
+
+  // 完成或取消后真正关闭；其余 close 请求（ESC/点外部）转为最小化成悬浮球
   requestClose() {
     this.finished = true;
+    if (this.minimized) {
+      // 弹窗已随最小化被彻底拆除（无 DOM 可关）：摘掉悬浮球、清引用即可
+      this.minimized = false;
+      if (this.orbEl) {
+        this.orbEl.remove();
+        this.orbEl = null;
+        this.orbBarEl = null;
+        this.orbPctEl = null;
+      }
+      for (const f of this._cleanup) f();
+      this._cleanup = [];
+      if (this.plugin.progModal === this) this.plugin.progModal = null;
+      return;
+    }
     this.close();
   }
 
   // 收尾：把进度顶到 100% 再关，避免停在中间就消失
   finish() {
     this.disp = 1;
-    this.paint();
+    this.paint(); // 最小化时也会同步刷悬浮球圆环到 100%
     this.requestClose();
   }
 
   close() {
-    if (!this.finished) return;
+    if (!this.finished) {
+      // ESC / 点击外部：不关闭（翻译还在跑），缩成悬浮球
+      this.minimize();
+      return;
+    }
     super.close();
   }
 
   onClose() {
     for (const f of this._cleanup) f();
     this._cleanup = [];
-    if (this.plugin.progModal === this) this.plugin.progModal = null;
+    if (this.orbEl) {
+      this.orbEl.remove();
+      this.orbEl = null;
+      this.orbBarEl = null;
+      this.orbPctEl = null;
+    }
+    // 最小化触发的拆除只是暂时性的：保留 progModal 引用，恢复时继续复用本实例
+    if (!this.minimized && this.plugin.progModal === this) {
+      this.plugin.progModal = null;
+    }
   }
 }
 
