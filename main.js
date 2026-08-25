@@ -1,4 +1,6 @@
-// Mini Translator v3.0.18 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.19 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.19：全文翻译完成后不再自动跳转到译文文件（不抢当前工作区焦点），
+//         产出路径改由完成通知给出
 // v3.0.18：进度窗只留一个 ✕——Obsidian 原生关闭按钮新版挂在 modal 外层导致 CSS
 //         隐藏失效，改为 onOpen 里从容器直接移除；悬浮球去彩改净——两色左右渐变
 //         （主题强调色浅→深）+ 轻微波动动画，不再旋转/不再多彩光晕
@@ -3709,13 +3711,10 @@ module.exports = class MiniTranslator extends Plugin {
     }
 
     this.clearFullTranslateStatus();
-    const af = this.app.vault.getAbstractFileByPath(path);
-    // 取消时不打开结果（且产物已删除）
-    if (af && info.openResult !== false && !cancelled)
-      await this.app.workspace.getLeaf("tab").openFile(af);
+    // 完成后不自动跳转到译文文件（不抢当前工作区焦点），产出路径在通知里给出
     this.resetFtCancel();
     this.endProg();
-    // 原版式 HTML 用系统浏览器打开（打印即得同版式 PDF）
+    // 原版式 HTML 用系统浏览器打开（打印即得同版式 PDF）；批量时只在最后一份打开
     if (info.openResult !== false && pageImgs.length && !cancelled) {
       try {
         const abs = this.app.vault.adapter.getFullPath(htmlPath);
@@ -3726,10 +3725,8 @@ module.exports = class MiniTranslator extends Plugin {
       cancelled
         ? "全文翻译已取消（产物已清理）"
         : failures.length
-          ? `全文翻译完成，但有 ${failures.length} 块失败（见笔记末尾）`
-          : this.settings.fullHtml
-            ? "全文翻译完成（Markdown + 原版式 HTML）"
-            : "全文翻译完成（Markdown）",
+          ? `全文翻译完成，但有 ${failures.length} 块失败（见笔记末尾）：${path}`
+          : `全文翻译完成：${path}`,
       6000
     );
     return cancelled; // 告诉批量调用方要不要继续下一份
