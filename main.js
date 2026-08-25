@@ -1,4 +1,7 @@
-// Mini Translator v3.0.16 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.17 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.17：修复最小化后悬浮球进度环冻结——翻译阶段进度全靠 120ms 动画心跳重画，
+//         最小化时误把它停了；现在最小化期间心跳继续跑，球实时跟随真实进度。
+//         token 计数取整显示（fmtTok <10000 时不再吐出原始浮点数）
 // v3.0.16：悬浮球重做为极光渐变球——旋转锥形渐变内核 + 呼吸彩色光晕 + 3D 高光，
 //         外圈渐变细环画真实进度，去掉全部文字；隐藏 Modal 自带关闭按钮修复双 ✕
 // v3.0.15：修复最小化后 Obsidian 全屏点不动——根因是隐藏的弹窗遮罩层仍在拦截指针；
@@ -890,9 +893,10 @@ function estTokens(chars) {
   return Math.ceil(chars / 3.5);
 }
 function fmtTok(n) {
-  return n >= 10000
-    ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k"
-    : String(n);
+  const v = Math.round(n); // token 只取整数，不显示小数尾巴
+  return v >= 10000
+    ? (v / 1000).toFixed(1).replace(/\.0$/, "") + "k"
+    : String(v);
 }
 
 // ---------- v3 批量协议：多块合并成一次请求，LLM 同一次产出「修复英文 + 中文」 ----------
@@ -1321,18 +1325,23 @@ class TranslateProgressModal extends Modal {
   minimize() {
     if (this.minimized) return;
     this.minimized = true;
-    for (const f of this._cleanup) f(); // 停动画定时器、摘拖动监听
-    this._cleanup = [];
     this.finished = true; // 放行 super.close()
-    super.close(); // 彻底拆除弹窗 DOM（绕过本类 close() 的最小化守卫）
+    super.close(); // 拆除弹窗 DOM；onClose 会停掉弹窗心跳与拖动监听、保留实例引用
     this.finished = false; // 恢复未完成标记：restore 后继续屏蔽 ESC/点外部误关
     this.buildOrb();
+    // 悬浮球的进度环要持续重画：重启动画心跳（弹窗那份已被 onClose 停掉）。
+    // 翻译阶段的进度全靠 tick() 每帧 paint，没有心跳球就会冻结
+    this.animTimer = setInterval(() => this.tick(), 120);
+    this._cleanup.push(() => clearInterval(this.animTimer));
   }
 
   // 点击悬浮球 → 弹回完整进度窗（重新构建，进度状态无缝续上）
   restore() {
     if (!this.minimized) return;
     this.minimized = false;
+    // 停掉最小化期间的心跳、摘掉悬浮球（onOpen 会重建弹窗自己的心跳）
+    for (const f of this._cleanup) f();
+    this._cleanup = [];
     if (this.orbEl) {
       this.orbEl.remove();
       this.orbEl = null;
