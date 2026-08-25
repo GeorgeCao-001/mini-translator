@@ -1,4 +1,7 @@
-// Mini Translator v3.0.17 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.18 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.18：进度窗只留一个 ✕——Obsidian 原生关闭按钮新版挂在 modal 外层导致 CSS
+//         隐藏失效，改为 onOpen 里从容器直接移除；悬浮球去彩改净——两色左右渐变
+//         （主题强调色浅→深）+ 轻微波动动画，不再旋转/不再多彩光晕
 // v3.0.17：修复最小化后悬浮球进度环冻结——翻译阶段进度全靠 120ms 动画心跳重画，
 //         最小化时误把它停了；现在最小化期间心跳继续跑，球实时跟随真实进度。
 //         token 计数取整显示（fmtTok <10000 时不再吐出原始浮点数）
@@ -1165,6 +1168,11 @@ class TranslateProgressModal extends Modal {
 
   onOpen() {
     this.modalEl.addClass("mini-prog-modal");
+    // Obsidian 原生关闭按钮与标题栏 ✕ 重复；新版把它挂在 modal 外层
+    // （CSS 后代选择器盖不到），这里直接从容器里移除，位置无关、必定生效
+    this.containerEl
+      .querySelectorAll(".modal-close-button")
+      .forEach((el) => el.remove());
     const c = this.contentEl;
     c.empty();
 
@@ -1353,24 +1361,17 @@ class TranslateProgressModal extends Modal {
 
   buildOrb() {
     if (this.orbEl) return;
-    // 极光球：旋转锥形渐变内核 + 模糊彩色光晕 + 3D 高光，外圈渐变细环画进度；
+    // 干净两色渐变球：内核左右渐变 + 轻微波动，外圈白色细环画真实进度；
     // 纯视觉无文字，点击弹回进度窗
     const orb = document.createElement("div");
     orb.className = "mini-prog-orb";
     orb.setAttribute("aria-label", "展开翻译进度");
     orb.innerHTML =
-      '<div class="mp-orb-halo" aria-hidden="true"></div>' +
       '<div class="mp-orb-core" aria-hidden="true"></div>' +
-      '<div class="mp-orb-gloss" aria-hidden="true"></div>' +
       '<svg class="mp-orb-ring" viewBox="0 0 48 48" aria-hidden="true">' +
-      '<defs><linearGradient id="mp-ring-grad" x1="0" y1="0" x2="1" y2="1">' +
-      '<stop offset="0" stop-color="#22d3ee"/>' +
-      '<stop offset="0.5" stop-color="#a78bfa"/>' +
-      '<stop offset="1" stop-color="#f472b6"/>' +
-      "</linearGradient></defs>" +
       '<circle class="mp-orb-track" cx="24" cy="24" r="22.5" pathLength="100"/>' +
       '<circle class="mp-orb-bar" cx="24" cy="24" r="22.5" pathLength="100"' +
-      ' stroke="url(#mp-ring-grad)" stroke-dasharray="100 100" stroke-dashoffset="100"/>' +
+      ' stroke-dasharray="100 100" stroke-dashoffset="100"/>' +
       "</svg>";
     this.orbEl = orb;
     this.orbBarEl = orb.querySelector(".mp-orb-bar");

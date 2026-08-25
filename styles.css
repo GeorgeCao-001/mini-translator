@@ -346,9 +346,9 @@
   display: none;
 }
 
-/* ---------- 极光悬浮球 ----------
-   三层结构：模糊彩色光晕(halo) + 旋转锥形渐变内核(core) + 静态高光(gloss)，
-   外圈渐变细环(ring)画真实进度。纯视觉无文字，点击弹回进度窗。 */
+/* ---------- 悬浮球（v3.0.18）----------
+   干净两色左右渐变内核 + 轻微波动（无旋转、无多彩光晕），
+   外圈白色细环画真实进度。纯视觉无文字，点击弹回进度窗。 */
 .mini-prog-orb {
   position: fixed;
   z-index: 200;
@@ -361,7 +361,7 @@
   transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .mini-prog-orb:hover {
-  transform: scale(1.15);
+  transform: scale(1.12);
 }
 .mini-prog-orb:active {
   cursor: grabbing;
@@ -371,89 +371,67 @@
   pointer-events: none;
 }
 
-/* 光晕：同款渐变模糊放大，旋转 + 呼吸，形成流动的彩色辉光 */
-.mp-orb-halo {
-  position: absolute;
-  inset: -6px;
-  border-radius: 50%;
-  background: conic-gradient(
-    from 0deg,
-    #818cf8,
-    #22d3ee,
-    #a78bfa,
-    #f472b6,
-    #fb7185,
-    #818cf8
-  );
-  filter: blur(9px);
-  opacity: 0.55;
-  animation:
-    mp-orb-rotate 5s linear infinite,
-    mp-halo-pulse 2.8s ease-in-out infinite;
-}
-/* 内核：清晰锥形渐变持续旋转（极光流动感） */
+/* 内核：仅两色（主题强调色的浅色端 → 原色），左→右渐变；
+   背景 220% 宽缓慢左右漂移 + 微缩呼吸 = 波动感 */
 .mp-orb-core {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: conic-gradient(
-    from 0deg,
-    #818cf8,
-    #22d3ee,
-    #a78bfa,
-    #f472b6,
-    #fb7185,
-    #818cf8
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--interactive-accent) 62%, #ffffff),
+    var(--interactive-accent)
   );
+  background-size: 220% 100%;
+  animation: mp-orb-wave 3.2s ease-in-out infinite;
   box-shadow:
-    inset 0 -5px 9px rgba(15, 23, 42, 0.35),
-    inset 0 3px 6px rgba(255, 255, 255, 0.4);
-  animation: mp-orb-rotate 3.2s linear infinite;
+    inset 0 -4px 8px rgba(15, 23, 42, 0.18),
+    inset 0 2px 5px rgba(255, 255, 255, 0.45),
+    0 2px 12px color-mix(in srgb, var(--interactive-accent) 30%, transparent);
 }
-/* 高光：固定不随内核旋转，营造球体立体感 */
-.mp-orb-gloss {
+/* 静态高光：球体立体感，不随动画晃动 */
+.mp-orb-core::after {
+  content: "";
   position: absolute;
   inset: 0;
   border-radius: 50%;
   background: radial-gradient(
-    circle at 31% 27%,
-    rgba(255, 255, 255, 0.9) 0%,
-    rgba(255, 255, 255, 0.28) 26%,
-    transparent 56%
+    circle at 32% 26%,
+    rgba(255, 255, 255, 0.7) 0%,
+    rgba(255, 255, 255, 0.16) 30%,
+    transparent 58%
   );
 }
-@keyframes mp-orb-rotate {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@keyframes mp-halo-pulse {
+@keyframes mp-orb-wave {
   0%,
   100% {
-    opacity: 0.45;
+    background-position: 0% 50%;
+    transform: scale(1);
   }
   50% {
-    opacity: 0.85;
+    background-position: 100% 50%;
+    transform: scale(1.05);
   }
 }
 
-/* 进度环：悬于球体外缘，渐变描边，-90° 起点在正上方 */
+/* 进度环：白色细环悬于球体外缘，-90° 起点在正上方 */
 .mp-orb-ring {
   position: absolute;
-  inset: -5px;
-  width: calc(100% + 10px);
-  height: calc(100% + 10px);
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
   display: block;
   transform: rotate(-90deg);
-  filter: drop-shadow(0 0 3px rgba(167, 139, 250, 0.65));
+  filter: drop-shadow(0 1px 3px rgba(15, 23, 42, 0.3));
 }
 .mp-orb-track {
   fill: none;
-  stroke: rgba(128, 128, 160, 0.25);
+  stroke: rgba(128, 128, 160, 0.3);
   stroke-width: 2.5;
 }
 .mp-orb-bar {
   fill: none;
+  stroke: #ffffff;
   stroke-width: 3;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.35s ease;
