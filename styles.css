@@ -454,6 +454,12 @@
 .translation-orb[data-translation-orb-surface="dark"] .translation-orb__track {
   stroke: rgb(225 232 240 / 0.16);
 }
+/* 进度弧也换浅色：浅色表面下皮肤 token 是深色描边，改为白色细线，
+   加一层很淡的中性投影保证在浅球浅底上仍可读（不形成黑边） */
+.translation-orb[data-translation-orb-surface="light"] .translation-orb__value {
+  stroke: rgb(255 255 255 / 0.95);
+  filter: drop-shadow(0 1px 2px rgb(80 90 110 / 0.30));
+}
 
 .translation-orb__value {
   vector-effect: non-scaling-stroke;
