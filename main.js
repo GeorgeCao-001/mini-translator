@@ -1,4 +1,5 @@
-// Mini Translator v3.0.24 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.25 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.25：悬浮球去黑边（删深色 outline、压淡外阴影），皮肤名改显示英文 id
 // v3.0.24：全文翻译移除「输出形式」选项——Markdown 输出固定纯中文译文
 //         （双语对照排版效果差；bilingual 字段不再写入，旧设置自动失效）
 // v3.0.23：设置页「悬浮球皮肤」加实时预览——复用 createOrbElement + 皮肤 token
@@ -2726,7 +2727,7 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
       .setName("皮肤")
       .setDesc("全文翻译最小化后的进度悬浮球外观；切换时上方实时预览")
       .addDropdown((dd) => {
-        for (const s of skinList) dd.addOption(s.id, s.label);
+        for (const s of skinList) dd.addOption(s.id, s.id); // 皮肤名直接显示英文 id
         dd.setValue(this.plugin.settings.orbSkin || "ink-wash").onChange(async (v) => {
           this.plugin.settings.orbSkin = v;
           await this.plugin.saveData(this.plugin.settings);

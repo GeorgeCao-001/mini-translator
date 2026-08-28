@@ -375,11 +375,10 @@
   height: var(--orb-size);
   flex: 0 0 var(--orb-size);
   border-radius: 50%;
-  outline: 1px solid color-mix(in srgb, var(--translation-orb-value) 44%, transparent);
-  outline-offset: -1px;
+  /* 去黑边：不再画深色轮廓，外阴影也压淡，球体直接融入背景 */
   background: var(--translation-orb-shell);
   box-shadow:
-    0 4px 12px rgb(12 14 14 / 0.22),
+    0 4px 12px rgb(12 14 14 / 0.10),
     inset 0 1px 1px rgb(255 255 255 / 0.62);
 }
 
