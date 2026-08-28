@@ -375,11 +375,9 @@
   height: var(--orb-size);
   flex: 0 0 var(--orb-size);
   border-radius: 50%;
-  /* 去黑边：不再画深色轮廓，外阴影也压淡，球体直接融入背景 */
+  /* 去黑边：不画深色轮廓、不投深色外阴影，球体直接融入背景 */
   background: var(--translation-orb-shell);
-  box-shadow:
-    0 4px 12px rgb(12 14 14 / 0.10),
-    inset 0 1px 1px rgb(255 255 255 / 0.62);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.62);
 }
 
 .translation-orb__halo,
@@ -410,7 +408,7 @@
   border-radius: 50%;
   background: var(--translation-orb-shell);
   box-shadow:
-    inset 0 -8px 12px rgb(9 12 13 / 0.18),
+    inset 0 -6px 10px rgb(9 12 13 / 0.06),
     inset 0 6px 10px rgb(255 255 255 / 0.22);
 }
 
@@ -447,6 +445,14 @@
 
 .translation-orb__track {
   stroke: var(--translation-orb-track);
+}
+/* 去黑边：皮肤 token 的轨道色在浅色下偏深，形成一圈“黑环”；
+   按当前表面直接改用极浅的半透明中性色（球上挂了 data-translation-orb-surface） */
+.translation-orb[data-translation-orb-surface="light"] .translation-orb__track {
+  stroke: rgb(110 120 145 / 0.14);
+}
+.translation-orb[data-translation-orb-surface="dark"] .translation-orb__track {
+  stroke: rgb(225 232 240 / 0.16);
 }
 
 .translation-orb__value {
