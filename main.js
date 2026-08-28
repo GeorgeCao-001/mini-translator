@@ -1,4 +1,6 @@
-// Mini Translator v3.0.23 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.24 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.24：全文翻译移除「输出形式」选项——Markdown 输出固定纯中文译文
+//         （双语对照排版效果差；bilingual 字段不再写入，旧设置自动失效）
 // v3.0.23：设置页「悬浮球皮肤」加实时预览——复用 createOrbElement + 皮肤 token
 //         纯展示渲染（不挂控制器），下拉切换即时重绘当前皮肤
 // v3.0.22：悬浮球换成 translation-orb 皮肤体系——vendor 纯 DOM 模块
@@ -2684,19 +2686,7 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
       );
 
     containerEl.createEl("h3", { text: "全文翻译" });
-    new Setting(containerEl)
-      .setName("输出形式")
-      .setDesc("双语对照：每块译文前附英文原文引用块，便于核对公式还原；纯译文：只保留中文")
-      .addDropdown((dd) =>
-        dd
-          .addOption("bilingual", "双语对照")
-          .addOption("zh", "纯译文")
-          .setValue(this.plugin.settings.fullMode || "bilingual")
-          .onChange(async (v) => {
-            this.plugin.settings.fullMode = v;
-            await this.plugin.saveData(this.plugin.settings);
-          })
-      );
+    // 输出形式固定为纯译文（双语对照排版效果差，选项已移除）
 
     new Setting(containerEl)
       .setName("原版式 HTML 复刻")
@@ -2766,7 +2756,6 @@ module.exports = class MiniTranslator extends Plugin {
         dictSource: "百度",
         autoTranslate: false,
         autoTranslateDelay: 2,
-        fullMode: "bilingual",
         fullHtml: false, // 原版式 HTML 复刻：默认关（纯 Markdown 更快）
         history: [],
         llmProfiles: [],
@@ -3553,7 +3542,7 @@ module.exports = class MiniTranslator extends Plugin {
         (prof && prof.activeModel ? `（${prof.activeModel}）` : ""),
       eta: `约 ${Math.max(1, Math.ceil((batches.length * 3.5) / 60))} 分钟`,
       tokensEst: estTokens(chars),
-      bilingual: this.settings.fullMode !== "zh",
+      // 输出形式固定为纯译文（双语对照选项已移除）；bilingual 字段不再写入
     };
   }
 
@@ -3713,19 +3702,10 @@ module.exports = class MiniTranslator extends Plugin {
       }
       const idxs = blocksByPage.get(p) || [];
       for (const gi of idxs) {
-        const b = info.blocks[gi];
         const res = results[gi];
         if (!res || !res.zh) continue; // 取消时未翻到的块跳过
         if (res.zh.startsWith("⚠️")) failures.push(gi + 1);
-        if (info.bilingual) {
-          // 模型输出可能带 \( \)/\[ \] 定界符（Obsidian 不渲染），统一归一为 $/$$
-          const enFixed = normalizeMathDelims(typofixEn(res.en || b.text));
-          md +=
-            enFixed
-              .split("\n")
-              .map((l) => (l.trim() ? "> " + l : ">"))
-              .join("\n") + "\n>\n";
-        }
+        // 输出形式固定纯译文：不再写英文原文引用块
         // 先归一定界符再重排：转换出的 $$…$$ 会被 mapMath 保护，内部换行不被折叠
         md += reflowZh(normalizeMathDelims(res.zh)) + "\n\n";
         doneBlocks++;
