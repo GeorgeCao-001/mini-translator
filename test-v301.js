@@ -107,7 +107,7 @@ const sandbox2 = {
     r.startsWith(".") ? require(nodePath.join(FAKE_APP_ROOT, r)) : require(r),
 };
 vm.createContext(sandbox2);
-vm.runInContext(src + "\n;__exports = { loadPdfJs };", sandbox2);
+vm.runInContext(src + "\n;__exports = { loadPdfJs, loadOrbModule };", sandbox2);
 const pluginStub = {
   manifest: { dir: nodePath.join(".obsidian", "plugins", "mini-translator") },
   app: {
@@ -120,6 +120,14 @@ const pluginStub = {
 const lib = sandbox2.__exports.loadPdfJs(pluginStub);
 eq("pdfjs-loads-via-anchors", !!lib && typeof lib.getDocument === "function", true);
 eq("worker-src-set", !!String(lib.GlobalWorkerOptions.workerSrc || "").length, true);
+
+// --- loadOrbModule：纯 CJS 的 translation-orb.js 经绝对路径锚点能 require 出导出 ---
+const orbMod = sandbox2.__exports.loadOrbModule(pluginStub);
+eq(
+  "orb-module-loads",
+  !!orbMod && typeof orbMod.TranslationOrbController === "function" && typeof orbMod.createDefaultSkinRegistry === "function",
+  true
+);
 
 // --- parseBatchResponse：⟦MTi⟧ 后的内容不丢 ---
 const out = "⟦EN1⟧ fixed one ⟦ZH1⟧ 第一段 ⟦MT2⟧ 第二段直出";

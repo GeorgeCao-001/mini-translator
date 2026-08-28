@@ -1,4 +1,8 @@
-// Mini Translator v3.0.21 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.22 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.22：悬浮球换成 translation-orb 皮肤体系——vendor 纯 DOM 模块
+//         （translation-orb.js 原样引入，经绝对路径锚点加载），内置水墨/星云/
+//         潮汐/琥珀/冰棱五款玻璃质感皮肤 + 深浅主题自动适配 + 方向键微调 +
+//         点击(<5px)回弹进度窗；皮肤与拖动位置存 settings，设置页可选可重置
 // v3.0.21：彻底修双 ✕——放弃按 class 删/隐原生关闭按钮（其挂载点与命名随版本
 //         变化，两轮修复均漏网），改为删除自绘 ✕、直接复用原生按钮：点击走
 //         close() 未完成转最小化，行为不变，构造上只可能有一个 ✕
@@ -877,6 +881,27 @@ function loadPdfJs(plugin) {
   return PDFJS_LIB;
 }
 
+// ---------- 悬浮球模块加载：translation-orb.js（纯 DOM，零依赖），同样走绝对路径锚定 ----------
+let ORB_MOD = null;
+function loadOrbModule(plugin) {
+  if (ORB_MOD) return ORB_MOD;
+  let mod = null;
+  let err = null;
+  for (const c of pluginFileCandidates(plugin, ["translation-orb.js"])) {
+    try {
+      mod = require(c);
+      break;
+    } catch (e) {
+      err = e;
+    }
+  }
+  if (!mod || typeof mod.TranslationOrbController !== "function") {
+    throw new Error(`加载 translation-orb.js 失败：${err?.message || err}`);
+  }
+  ORB_MOD = mod;
+  return mod;
+}
+
 // 取任意 vault PDF 文件的文档对象：已在某视图中打开则直接复用其文档，否则独立解析二进制
 async function getPdfDocForFile(plugin, file) {
   for (const leaf of plugin.app.workspace.getLeavesOfType("pdf")) {
@@ -1159,8 +1184,7 @@ class TranslateProgressModal extends Modal {
     this.plugin.progModal = this;
     this.finished = false; // 完成前屏蔽 ESC / 点击外部的关闭请求
     this.minimized = false; // 最小化成悬浮球中（弹窗隐藏但翻译继续）
-    this.orbEl = null; // 悬浮球元素
-    this.orbBarEl = null; // 悬浮球 SVG 进度环
+    this.orbCtrl = null; // 悬浮球控制器（translation-orb），最小化期间存活
     this._cleanup = [];
     // 匀速爬动进度引擎状态
     this.disp = 0; // 当前显示进度 0..1（单调不减，每次最多 +1%）
@@ -1323,9 +1347,9 @@ class TranslateProgressModal extends Modal {
       );
     }
     if (this.metaEl) this.metaEl.setText(bits.join(" · "));
-    // 悬浮球：圆环绘制进度 + hover 气泡数字；无总量（提取阶段）切到旋转弧线
-    if (this.orbBarEl) this.orbBarEl.style.strokeDashoffset = String(100 - pct);
-    if (this.orbEl) this.orbEl.classList.toggle("indet", !st.total);
+    // 悬浮球：真实进度画环；无总量（提取阶段）传 null 转旋转弧线。
+    // notify=false：paint 每 120ms 一次，不应触发持久化广播
+    if (this.orbCtrl) this.orbCtrl.setProgress(st.total ? pct : null, false);
   }
 
   // ---------- 最小化成悬浮球 ----------
@@ -1338,7 +1362,7 @@ class TranslateProgressModal extends Modal {
     this.finished = true; // 放行 super.close()
     super.close(); // 拆除弹窗 DOM；onClose 会停掉弹窗心跳与拖动监听、保留实例引用
     this.finished = false; // 恢复未完成标记：restore 后继续屏蔽 ESC/点外部误关
-    this.buildOrb();
+    this.showOrb();
     // 悬浮球的进度环要持续重画：重启动画心跳（弹窗那份已被 onClose 停掉）。
     // 翻译阶段的进度全靠 tick() 每帧 paint，没有心跳球就会冻结
     this.animTimer = setInterval(() => this.tick(), 120);
@@ -1349,75 +1373,72 @@ class TranslateProgressModal extends Modal {
   restore() {
     if (!this.minimized) return;
     this.minimized = false;
-    // 停掉最小化期间的心跳、摘掉悬浮球（onOpen 会重建弹窗自己的心跳）
+    // 停掉最小化期间的心跳、销毁悬浮球（onOpen 会重建弹窗自己的心跳）
     for (const f of this._cleanup) f();
     this._cleanup = [];
-    if (this.orbEl) {
-      this.orbEl.remove();
-      this.orbEl = null;
-      this.orbBarEl = null;
-    }
+    this.hideOrb();
     this.open(); // 重挂载 DOM 并重跑 onOpen（重建内容、定时器、拖动）
     this.paint();
   }
 
-  buildOrb() {
-    if (this.orbEl) return;
-    // 干净两色渐变球：内核左右渐变 + 轻微波动，外圈白色细环画真实进度；
-    // 纯视觉无文字，点击弹回进度窗
-    const orb = document.createElement("div");
-    orb.className = "mini-prog-orb";
-    orb.setAttribute("aria-label", "展开翻译进度");
-    orb.innerHTML =
-      '<div class="mp-orb-core" aria-hidden="true"></div>' +
-      '<svg class="mp-orb-ring" viewBox="0 0 48 48" aria-hidden="true">' +
-      '<circle class="mp-orb-track" cx="24" cy="24" r="22.5" pathLength="100"/>' +
-      '<circle class="mp-orb-bar" cx="24" cy="24" r="22.5" pathLength="100"' +
-      ' stroke-dasharray="100 100" stroke-dashoffset="100"/>' +
-      "</svg>";
-    this.orbEl = orb;
-    this.orbBarEl = orb.querySelector(".mp-orb-bar");
-    // 拖动与点击并存：位移 <5px 视为点击（弹回），否则是拖到顺手的位置
-    let sx = 0, sy = 0, ox = 0, oy = 0, moved = false;
-    const mv = (e) => {
-      if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 5) moved = true;
-      if (!moved) return;
-      orb.style.left = `${ox + e.clientX - sx}px`;
-      orb.style.top = `${oy + e.clientY - sy}px`;
-    };
-    const up = () => {
-      window.removeEventListener("mousemove", mv);
-      window.removeEventListener("mouseup", up);
-      if (!moved && this.minimized) this.restore();
-    };
-    orb.addEventListener("mousedown", (e) => {
-      const r = orb.getBoundingClientRect();
-      ox = r.left;
-      oy = r.top;
+  // 显示悬浮球：懒创建控制器（translation-orb 模块），mount 到 body，套用皮肤/位置/当前进度
+  showOrb() {
+    if (this.orbCtrl) return;
+    const { TranslationOrbController, createDefaultSkinRegistry } = loadOrbModule(this.plugin);
+    const s = this.plugin.settings;
+    const st = this._lastSt || {};
+    const pct = Math.min(100, Math.round(this.disp * 100));
+    const ctrl = new TranslationOrbController({
+      document,
+      window,
+      registry: createDefaultSkinRegistry(),
+      surface: "auto",
+      skin: s.orbSkin || "ink-wash",
+      position: s.orbPosition || null,
+      progress: st.total ? pct : null,
+      onStateChange: (state, reason) => {
+        // 只持久化低频的用户态变化；progress 每 120ms 一次，绝不落盘
+        if (reason !== "position" && reason !== "skin") return;
+        s.orbSkin = state.skin;
+        s.orbPosition = state.position ? { ...state.position } : null;
+        void this.plugin.saveData(s);
+      },
+    });
+    ctrl.mount(document.body);
+    this.orbCtrl = ctrl;
+    // 拖动与点击并存：demo 控制器只管拖动；这里补「位移 <5px = 点击弹回」，
+    // 不修改 vendored 文件。pointer 事件经 setPointerCapture 后仍会派发到 host
+    const host = ctrl.host;
+    let sx = 0, sy = 0;
+    host.addEventListener("pointerdown", (e) => {
       sx = e.clientX;
       sy = e.clientY;
-      moved = false;
-      e.preventDefault();
-      window.addEventListener("mousemove", mv);
-      window.addEventListener("mouseup", up);
     });
-    document.body.appendChild(orb);
-    this._cleanup.push(() => {
-      orb.remove();
+    host.addEventListener("pointerup", (e) => {
+      if (
+        Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < 5 &&
+        this.minimized
+      ) {
+        this.restore();
+      }
     });
+  }
+
+  // 销毁悬浮球，只在 minimize/restore/requestClose 三个点显式调用
+  hideOrb() {
+    if (this.orbCtrl) {
+      this.orbCtrl.destroy();
+      this.orbCtrl = null;
+    }
   }
 
   // 完成或取消后真正关闭；其余 close 请求（ESC/点外部）转为最小化成悬浮球
   requestClose() {
     this.finished = true;
     if (this.minimized) {
-      // 弹窗已随最小化被彻底拆除（无 DOM 可关）：摘掉悬浮球、清引用即可
+      // 弹窗已随最小化被彻底拆除（无 DOM 可关）：销毁悬浮球、清引用即可
       this.minimized = false;
-      if (this.orbEl) {
-        this.orbEl.remove();
-        this.orbEl = null;
-        this.orbBarEl = null;
-      }
+      this.hideOrb();
       for (const f of this._cleanup) f();
       this._cleanup = [];
       if (this.plugin.progModal === this) this.plugin.progModal = null;
@@ -1445,11 +1466,9 @@ class TranslateProgressModal extends Modal {
   onClose() {
     for (const f of this._cleanup) f();
     this._cleanup = [];
-    if (this.orbEl) {
-      this.orbEl.remove();
-      this.orbEl = null;
-      this.orbBarEl = null;
-    }
+    // 悬浮球由 minimize/restore/requestClose 显式管理，onClose 不碰它。
+    // 枚举路径确认二者不共存：minimize 的 super.close() 早于 showOrb()；finish/ESC
+    // 的关闭路径中 orb 已先被 hideOrb() 销毁
     // 最小化触发的拆除只是暂时性的：保留 progModal 引用，恢复时继续复用本实例
     if (!this.minimized && this.plugin.progModal === this) {
       this.plugin.progModal = null;
@@ -2688,6 +2707,31 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
             await this.plugin.saveData(this.plugin.settings);
           })
       );
+
+    containerEl.createEl("h3", { text: "悬浮球" });
+    new Setting(containerEl)
+      .setName("皮肤")
+      .setDesc("全文翻译最小化后的进度悬浮球外观，五款内置皮肤均共用玻璃结构与进度环")
+      .addDropdown((dd) => {
+        for (const skin of ["ink-wash", "galaxy", "water-wave", "amber-glow", "frost-prism"]) {
+          dd.addOption(skin, skin);
+        }
+        dd.setValue(this.plugin.settings.orbSkin || "ink-wash").onChange(async (v) => {
+          this.plugin.settings.orbSkin = v;
+          await this.plugin.saveData(this.plugin.settings);
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("重置悬浮球位置")
+      .setDesc("清除记录的拖动位置，下次最小化时回到默认右下角")
+      .addButton((btn) =>
+        btn.setButtonText("重置").onClick(async () => {
+          this.plugin.settings.orbPosition = null;
+          await this.plugin.saveData(this.plugin.settings);
+          new Notice("悬浮球位置已重置", 2000);
+        })
+      );
   }
 }
 
@@ -2704,6 +2748,8 @@ module.exports = class MiniTranslator extends Plugin {
         history: [],
         llmProfiles: [],
         activeProfile: 0,
+        orbSkin: "ink-wash", // 悬浮球皮肤（translation-orb 五款内置之一）
+        orbPosition: null, // 悬浮球拖动位置 {x,y}，null 用默认右下角
       },
       await this.loadData()
     );

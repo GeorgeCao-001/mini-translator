@@ -328,104 +328,369 @@
 /* 进度窗不再自绘 ✕：直接复用 Obsidian 原生关闭按钮（点击走 close() → 未完成转最小化），
    构造上只有一个关闭按钮，杜绝双 ✕ */
 
-/* ---------- 悬浮球（v3.0.18）----------
-   干净两色左右渐变内核 + 轻微波动（无旋转、无多彩光晕），
-   外圈白色细环画真实进度。纯视觉无文字，点击弹回进度窗。 */
-.mini-prog-orb {
+.translation-orb-host {
+  --translation-orb-x: 0px;
+  --translation-orb-y: 0px;
   position: fixed;
+  top: 0;
+  left: 0;
   z-index: 200;
   width: 40px;
   height: 40px;
-  right: 20px;
-  bottom: 72px;
-  cursor: grab;
+  transform: translate3d(var(--translation-orb-x), var(--translation-orb-y), 0);
+  touch-action: none;
   user-select: none;
-  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  cursor: grab;
+  contain: layout style;
 }
-.mini-prog-orb:hover {
-  transform: scale(1.12);
+
+.translation-orb-host[hidden] {
+  display: none !important;
 }
-.mini-prog-orb:active {
+
+.translation-orb-host.is-dragging {
   cursor: grabbing;
 }
-.mini-prog-orb > div,
-.mini-prog-orb > svg {
+
+.translation-orb-host:focus-visible {
+  outline: 3px solid var(--interactive-accent, #7d8fc8);
+  outline-offset: 5px;
+  border-radius: 50%;
+}
+
+.translation-orb {
+  --orb-size: 40px;
+  --progress-offset: 32;
+  --translation-orb-shell: #d8dcda;
+  --translation-orb-tone-a: #586167;
+  --translation-orb-tone-b: #9da6a5;
+  --translation-orb-tone-c: #d7dad4;
+  --translation-orb-accent: #596571;
+  --translation-orb-track: rgb(46 52 51 / 0.2);
+  --translation-orb-value: #303b40;
+  --translation-orb-ring-shadow: rgb(255 255 255 / 0.7);
+  position: relative;
+  isolation: isolate;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  flex: 0 0 var(--orb-size);
+  border-radius: 50%;
+  outline: 1px solid color-mix(in srgb, var(--translation-orb-value) 44%, transparent);
+  outline-offset: -1px;
+  background: var(--translation-orb-shell);
+  box-shadow:
+    0 4px 12px rgb(12 14 14 / 0.22),
+    inset 0 1px 1px rgb(255 255 255 / 0.62);
+}
+
+.translation-orb__halo,
+.translation-orb__core,
+.translation-orb__layer,
+.translation-orb__texture,
+.translation-orb__highlight,
+.translation-orb__reflection,
+.translation-orb__progress {
+  position: absolute;
+  inset: 0;
+  display: block;
   pointer-events: none;
 }
 
-/* 内核：两色左右渐变（浅色端 → 主题强调色），对比拉满保证肉眼可辨；
-   波动感 = 渐变窗口缓慢左右漂移 + 上下轻浮 + 呼吸微缩放，无旋转 */
-.mp-orb-core {
-  position: absolute;
-  inset: 0;
+.translation-orb__halo {
+  inset: -3px;
+  z-index: -1;
   border-radius: 50%;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--interactive-accent) 40%, #ffffff) 0%,
-    var(--interactive-accent) 100%
-  );
-  background-size: 200% 100%;
-  animation: mp-orb-wave 3.2s ease-in-out infinite;
-  box-shadow:
-    inset 0 -4px 8px rgba(15, 23, 42, 0.18),
-    inset 0 2px 5px rgba(255, 255, 255, 0.5),
-    0 3px 14px color-mix(in srgb, var(--interactive-accent) 38%, transparent);
-}
-/* 静态高光：球体立体感，不随动画晃动 */
-.mp-orb-core::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle at 32% 26%,
-    rgba(255, 255, 255, 0.7) 0%,
-    rgba(255, 255, 255, 0.16) 30%,
-    transparent 58%
-  );
-}
-@keyframes mp-orb-wave {
-  0%,
-  100% {
-    background-position: 0% 50%;
-    transform: translateY(0) scale(1);
-  }
-  50% {
-    background-position: 100% 50%;
-    transform: translateY(-2.5px) scale(1.06);
-  }
+  background: radial-gradient(circle, color-mix(in srgb, var(--translation-orb-accent) 25%, transparent) 0 48%, transparent 72%);
+  opacity: 0.6;
 }
 
-/* 进度环：白色细环悬于球体外缘，-90° 起点在正上方 */
-.mp-orb-ring {
-  position: absolute;
-  inset: -4px;
-  width: calc(100% + 8px);
-  height: calc(100% + 8px);
-  display: block;
+.translation-orb__core {
+  inset: 2px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.42);
+  border-radius: 50%;
+  background: var(--translation-orb-shell);
+  box-shadow:
+    inset 0 -8px 12px rgb(9 12 13 / 0.18),
+    inset 0 6px 10px rgb(255 255 255 / 0.22);
+}
+
+.translation-orb__highlight {
+  inset: 4px 7px 21px 8px;
+  z-index: 5;
+  border-radius: 50%;
+  background: linear-gradient(140deg, rgb(255 255 255 / 0.78), rgb(255 255 255 / 0));
+  filter: blur(0.2px);
+  opacity: 0.7;
+}
+
+.translation-orb__reflection {
+  inset: 25px 8px 5px 13px;
+  z-index: 5;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.17);
+  filter: blur(2px);
+}
+
+.translation-orb__progress {
+  z-index: 8;
+  width: 40px;
+  height: 40px;
+  overflow: visible;
+  fill: none;
   transform: rotate(-90deg);
-  filter: drop-shadow(0 1px 3px rgba(15, 23, 42, 0.3));
 }
-.mp-orb-track {
-  fill: none;
-  stroke: rgba(128, 128, 160, 0.3);
-  stroke-width: 2.5;
-}
-.mp-orb-bar {
-  fill: none;
-  stroke: #ffffff;
+
+.translation-orb__track {
+  vector-effect: non-scaling-stroke;
   stroke-width: 3;
+}
+
+.translation-orb__track {
+  stroke: var(--translation-orb-track);
+}
+
+.translation-orb__value {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 3;
+  stroke: var(--translation-orb-value);
+  stroke-dashoffset: var(--progress-offset);
   stroke-linecap: round;
-  transition: stroke-dashoffset 0.35s ease;
+  filter: drop-shadow(0 0.5px 0 var(--translation-orb-ring-shadow));
 }
-/* 提取阶段无总量：进度环变旋转弧线 */
-.mini-prog-orb.indet .mp-orb-bar {
+
+.translation-orb[data-translation-orb-state="determinate"] .translation-orb__value {
+  stroke-dasharray: 100 0;
+  stroke-dashoffset: var(--progress-offset);
+}
+
+.translation-orb[data-translation-orb-state="indeterminate"] .translation-orb__value {
   stroke-dasharray: 24 76;
-  transition: none;
-  animation: mp-orb-spin 1s linear infinite;
+  stroke-dashoffset: 8;
 }
-@keyframes mp-orb-spin {
-  to {
-    stroke-dashoffset: -100;
+
+.translation-orb[data-translation-orb-state="indeterminate"] .translation-orb__progress {
+  animation: translation-orb-progress-spin 1.35s linear infinite;
+}
+
+/* Ink wash: asymmetric, overlapping pigment blooms. */
+.translation-orb[data-skin="ink-wash"] .translation-orb__layer--a {
+  inset: -5px 9px 9px -7px;
+  border-radius: 63% 37% 48% 52%;
+  background: radial-gradient(circle at 68% 46%, var(--translation-orb-tone-a), transparent 72%);
+  filter: blur(1.2px);
+  opacity: 0.88;
+  animation: translation-orb-ink-breathe-a 3.6s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="ink-wash"] .translation-orb__layer--b {
+  inset: 9px -8px -6px 6px;
+  border-radius: 38% 62% 57% 43%;
+  background: radial-gradient(circle at 32% 34%, var(--translation-orb-tone-b), transparent 70%);
+  filter: blur(1.8px);
+  opacity: 0.74;
+  animation: translation-orb-ink-breathe-b 4s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="ink-wash"] .translation-orb__layer--c {
+  inset: 14px 5px -7px -3px;
+  border-radius: 70% 30% 58% 42%;
+  background: var(--translation-orb-tone-c);
+  filter: blur(3px);
+  opacity: 0.38;
+}
+
+.translation-orb[data-skin="ink-wash"] .translation-orb__texture {
+  background: radial-gradient(circle at 61% 28%, rgb(255 255 255 / 0.18) 0 1px, transparent 1.6px);
+  opacity: 0.8;
+}
+
+/* Galaxy: an oblique band and deliberately sparse, fixed star points. */
+.translation-orb[data-skin="galaxy"] .translation-orb__layer--a {
+  inset: 12px -7px 10px -7px;
+  background: linear-gradient(102deg, transparent, var(--translation-orb-tone-b) 32%, var(--translation-orb-tone-a) 61%, transparent);
+  filter: blur(2px);
+  opacity: 0.88;
+  transform: skewY(-17deg);
+  animation: translation-orb-galaxy-band 3.8s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="galaxy"] .translation-orb__layer--b {
+  inset: 15px -9px 12px -9px;
+  background: var(--translation-orb-accent);
+  filter: blur(4px);
+  opacity: 0.32;
+  transform: skewY(-17deg);
+}
+
+.translation-orb[data-skin="galaxy"] .translation-orb__layer--c {
+  background: radial-gradient(circle at 73% 71%, var(--translation-orb-tone-c), transparent 24%);
+  opacity: 0.55;
+}
+
+.translation-orb[data-skin="galaxy"] .translation-orb__texture {
+  z-index: 4;
+  background:
+    radial-gradient(circle at 27% 27%, rgb(255 255 255 / 0.92) 0 0.6px, transparent 1px),
+    radial-gradient(circle at 66% 22%, rgb(255 255 255 / 0.7) 0 0.5px, transparent 1px),
+    radial-gradient(circle at 76% 58%, rgb(255 255 255 / 0.8) 0 0.7px, transparent 1.1px),
+    radial-gradient(circle at 38% 72%, rgb(255 255 255 / 0.58) 0 0.5px, transparent 1px),
+    radial-gradient(circle at 19% 55%, rgb(255 255 255 / 0.65) 0 0.45px, transparent 0.9px);
+  animation: translation-orb-star-pulse 3.4s ease-in-out infinite;
+}
+
+/* Water wave: two discrete tide bands crossing the lower hemisphere. */
+.translation-orb[data-skin="water-wave"] .translation-orb__layer--a {
+  inset: 17px -7px -6px -7px;
+  border-radius: 50% 44% 0 0;
+  background: linear-gradient(180deg, var(--translation-orb-tone-b), var(--translation-orb-tone-a));
+  opacity: 0.78;
+  animation: translation-orb-tide-near 3.6s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="water-wave"] .translation-orb__layer--b {
+  inset: 12px -9px -10px -9px;
+  border-radius: 42% 56% 0 0;
+  background: var(--translation-orb-tone-c);
+  opacity: 0.36;
+  animation: translation-orb-tide-far 4s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="water-wave"] .translation-orb__layer--c {
+  inset: 7px 8px 16px 4px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgb(255 255 255 / 0.3), transparent);
+  filter: blur(3px);
+}
+
+.translation-orb[data-skin="water-wave"] .translation-orb__texture {
+  inset: 20px 4px 11px;
+  z-index: 4;
+  border-top: 1px solid rgb(255 255 255 / 0.48);
+  border-radius: 50%;
+  opacity: 0.7;
+}
+
+/* Amber glow: a grounded convection pool rising from the bottom. */
+.translation-orb[data-skin="amber-glow"] .translation-orb__layer--a {
+  inset: 20px -4px -7px -4px;
+  border-radius: 55% 45% 0 0;
+  background: radial-gradient(ellipse at 50% 100%, var(--translation-orb-tone-a), var(--translation-orb-tone-b) 64%, transparent 70%);
+  filter: blur(0.8px);
+  opacity: 0.9;
+  animation: translation-orb-amber-pool 3.8s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="amber-glow"] .translation-orb__layer--b {
+  inset: 12px 8px 8px 11px;
+  border-radius: 50%;
+  background: var(--translation-orb-tone-c);
+  filter: blur(4px);
+  opacity: 0.46;
+  animation: translation-orb-amber-plume-a 3.6s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="amber-glow"] .translation-orb__layer--c {
+  inset: 8px 17px 13px 6px;
+  border-radius: 50%;
+  background: var(--translation-orb-accent);
+  filter: blur(4px);
+  opacity: 0.25;
+  animation: translation-orb-amber-plume-b 4s ease-in-out infinite;
+}
+
+.translation-orb[data-skin="amber-glow"] .translation-orb__texture {
+  background: linear-gradient(180deg, transparent 43%, rgb(255 255 255 / 0.12));
+}
+
+/* Frost prism: static clipped facets, intentionally without ambient motion. */
+.translation-orb[data-skin="frost-prism"] .translation-orb__layer--a {
+  inset: 3px 14px 6px 3px;
+  clip-path: polygon(0 0, 100% 18%, 55% 100%, 8% 68%);
+  background: linear-gradient(142deg, var(--translation-orb-tone-c), var(--translation-orb-tone-a));
+  opacity: 0.65;
+}
+
+.translation-orb[data-skin="frost-prism"] .translation-orb__layer--b {
+  inset: 9px 2px 2px 15px;
+  clip-path: polygon(42% 0, 100% 23%, 84% 100%, 0 72%);
+  background: linear-gradient(30deg, var(--translation-orb-tone-a), var(--translation-orb-tone-b));
+  opacity: 0.6;
+}
+
+.translation-orb[data-skin="frost-prism"] .translation-orb__layer--c {
+  inset: 2px 4px 17px 12px;
+  clip-path: polygon(10% 0, 100% 0, 68% 100%, 0 72%);
+  background: var(--translation-orb-tone-c);
+  opacity: 0.42;
+}
+
+.translation-orb[data-skin="frost-prism"] .translation-orb__texture {
+  inset: 5px;
+  z-index: 4;
+  clip-path: polygon(48% 0, 54% 42%, 100% 68%, 57% 61%, 33% 100%, 43% 56%, 0 29%, 39% 45%);
+  background: rgb(255 255 255 / 0.36);
+  opacity: 0.72;
+}
+
+@keyframes translation-orb-progress-spin {
+  from { transform: rotate(-90deg); }
+  to { transform: rotate(270deg); }
+}
+
+@keyframes translation-orb-ink-breathe-a {
+  0%, 100% { transform: translate(-1px, 1px) scale(1); opacity: 0.8; }
+  50% { transform: translate(2px, -1px) scale(1.05); opacity: 0.94; }
+}
+
+@keyframes translation-orb-ink-breathe-b {
+  0%, 100% { transform: translate(1px, 0) scale(1.03); opacity: 0.68; }
+  50% { transform: translate(-2px, 2px) scale(0.98); opacity: 0.82; }
+}
+
+@keyframes translation-orb-galaxy-band {
+  0%, 100% { transform: translate(-1px, 1px) skewY(-17deg); opacity: 0.76; }
+  50% { transform: translate(2px, -1px) skewY(-17deg); opacity: 0.94; }
+}
+
+@keyframes translation-orb-star-pulse {
+  0%, 100% { opacity: 0.56; }
+  50% { opacity: 0.92; }
+}
+
+@keyframes translation-orb-tide-near {
+  0%, 100% { transform: translate(-2px, 1px) scale(1.02); opacity: 0.76; }
+  50% { transform: translate(2px, -1px) scale(1.05); opacity: 0.9; }
+}
+
+@keyframes translation-orb-tide-far {
+  0%, 100% { transform: translate(2px, -1px) scale(1.02); opacity: 0.3; }
+  50% { transform: translate(-2px, 1px) scale(1.04); opacity: 0.48; }
+}
+
+@keyframes translation-orb-amber-pool {
+  0%, 100% { transform: translate(0, 1px) scale(1.01); opacity: 0.82; }
+  50% { transform: translate(0, -2px) scale(1.06); opacity: 0.96; }
+}
+
+@keyframes translation-orb-amber-plume-a {
+  0%, 100% { transform: translate(-1px, 2px) scale(0.98); opacity: 0.3; }
+  50% { transform: translate(2px, -2px) scale(1.04); opacity: 0.56; }
+}
+
+@keyframes translation-orb-amber-plume-b {
+  0%, 100% { transform: translate(1px, 2px) scale(1); opacity: 0.18; }
+  50% { transform: translate(-1px, -1px) scale(1.03); opacity: 0.34; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .translation-orb {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .translation-orb * {
+    animation: none !important;
+    transition: none !important;
   }
 }
