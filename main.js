@@ -1,4 +1,6 @@
-// Mini Translator v3.0.22 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.23 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.23：设置页「悬浮球皮肤」加实时预览——复用 createOrbElement + 皮肤 token
+//         纯展示渲染（不挂控制器），下拉切换即时重绘当前皮肤
 // v3.0.22：悬浮球换成 translation-orb 皮肤体系——vendor 纯 DOM 模块
 //         （translation-orb.js 原样引入，经绝对路径锚点加载），内置水墨/星云/
 //         潮汐/琥珀/冰棱五款玻璃质感皮肤 + 深浅主题自动适配 + 方向键微调 +
@@ -2709,18 +2711,39 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
       );
 
     containerEl.createEl("h3", { text: "悬浮球" });
+    // 实时预览：直接复用 translation-orb 的 createOrbElement + 皮肤 token，不挂控制器
+    //（无固定定位、无事件监听，纯展示，随下拉切换即时重绘）
+    const orbMod = loadOrbModule(this.plugin);
+    const orbRegistry = orbMod.createDefaultSkinRegistry();
+    const skinList = orbRegistry.list(); // [{id,label,description}]
+    const previewHost = containerEl.createDiv("mini-orb-preview");
+    const renderOrbPreview = (skinId) => {
+      previewHost.empty();
+      const orb = orbMod.createOrbElement(document);
+      const skin = orbRegistry.resolve(skinId);
+      const surface = document.body.classList.contains("theme-dark") ? "dark" : "light";
+      orb.dataset.skin = skin.id;
+      orb.dataset.translationOrbSkin = skin.id;
+      orb.dataset.translationOrbSurface = surface;
+      orb.dataset.translationOrbState = "determinate";
+      orb.style.setProperty("--progress-offset", "38"); // 预览固定画 62%
+      for (const [name, value] of Object.entries(skin.tokens[surface])) {
+        orb.style.setProperty(name, value);
+      }
+      previewHost.appendChild(orb);
+    };
     new Setting(containerEl)
       .setName("皮肤")
-      .setDesc("全文翻译最小化后的进度悬浮球外观，五款内置皮肤均共用玻璃结构与进度环")
+      .setDesc("全文翻译最小化后的进度悬浮球外观；切换时上方实时预览")
       .addDropdown((dd) => {
-        for (const skin of ["ink-wash", "galaxy", "water-wave", "amber-glow", "frost-prism"]) {
-          dd.addOption(skin, skin);
-        }
+        for (const s of skinList) dd.addOption(s.id, s.label);
         dd.setValue(this.plugin.settings.orbSkin || "ink-wash").onChange(async (v) => {
           this.plugin.settings.orbSkin = v;
           await this.plugin.saveData(this.plugin.settings);
+          renderOrbPreview(v);
         });
       });
+    renderOrbPreview(this.plugin.settings.orbSkin || "ink-wash");
 
     new Setting(containerEl)
       .setName("重置悬浮球位置")

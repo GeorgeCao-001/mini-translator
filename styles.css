@@ -694,3 +694,15 @@
     transition: none !important;
   }
 }
+
+/* 设置页「悬浮球皮肤」实时预览：把 40px 球居中摆进浅底容器（仅设置页用） */
+.mini-orb-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 64px;
+  margin: 4px 0 12px;
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+}
