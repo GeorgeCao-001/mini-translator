@@ -62,14 +62,6 @@
   user-select: text;
 }
 
-.mini-translator-stream-caret {
-  color: var(--interactive-accent);
-  animation: mini-translator-caret-blink 0.8s steps(1) infinite;
-}
-@keyframes mini-translator-caret-blink {
-  50% { opacity: 0; }
-}
-
 /* 中文文本规范：段首缩进两字符；词典释义是条目式，不缩进；可光标选中复制 */
 .mini-zh-line {
   font-size: var(--font-text-size);
@@ -94,6 +86,18 @@
   text-indent: 0;
   white-space: pre-wrap;
   user-select: text;
+}
+
+/* 选区旁的小弹窗保持紧凑；内容过长时在固定高度内滚动，而不是撑满屏幕。 */
+.mini-translator-popup .mini-en-line {
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
+.mini-translator-popup .mini-zh-line,
+.mini-translator-popup .mini-dict-line {
+  line-height: 1.6;
+  margin-bottom: 8px;
 }
 
 .mini-zh-line:last-child {
