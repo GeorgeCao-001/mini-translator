@@ -1,4 +1,5 @@
-// Mini Translator v3.0.28 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.29 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.29：翻译悬浮窗改为内容自适应宽度，短句更紧凑、长句限制在可读范围内；
 // v3.0.28：悬浮窗恢复一次性高质量译文输出，等待阶段用三个动态圆点提示；
 //         保留完整选区一次请求和紧凑弹窗，避免把服务端批量响应硬做成难看的流式动画。
 // v3.0.26：悬浮球动效增强——新增全局旋转流光（core 内锥形楔块绕核扫过）、光晕掺金
@@ -83,6 +84,9 @@ const UA =
 const CACHE = new Map();
 const CACHE_MAX = 200;
 const POPUP_BODY_MAX_HEIGHT = "min(280px, 42vh)";
+const POPUP_MIN_WIDTH = "min(180px, calc(100vw - 16px))";
+const POPUP_MAX_WIDTH = "min(420px, calc(100vw - 16px))";
+const POPUP_MAX_WIDTH_PX = 420;
 
 // ---------- 源状态中枢（统一广播）：任何界面对 翻译源/词典/模型/选中状态 的改动，
 // 落盘后自动通知所有注册的界面立即重建。界面自己不关心别人，只管订阅。 ----------
@@ -3139,7 +3143,7 @@ module.exports = class MiniTranslator extends Plugin {
     };
     // x/y historically meant the requested popup origin (y is selection bottom + 6px).
     // Keep that fallback for callers that cannot expose a real selection rectangle.
-    const fallbackLeft = finite(x, Math.max(8, (vw - 480) / 2));
+    const fallbackLeft = finite(x, Math.max(8, (vw - POPUP_MAX_WIDTH_PX) / 2));
     const fallbackBottom = finite(y, vh / 2) - 6;
     const left = finite(anchor?.left, fallbackLeft);
     const top = finite(anchor?.top, Math.max(0, fallbackBottom - 22));
@@ -3226,8 +3230,12 @@ module.exports = class MiniTranslator extends Plugin {
       left: `${Math.max(8, this.lastPopupAnchor.left)}px`,
       top: `${Math.max(8, this.lastPopupAnchor.bottom + 8)}px`,
       zIndex: "1000",
-      width: "min(480px, calc(100vw - 16px))",
-      maxWidth: "calc(100vw - 16px)",
+      // Keep short translations compact while capping long ones at a readable width.
+      // The intrinsic width grows with the rendered content and the max-width makes
+      // longer source/translation pairs wrap instead of stretching across the screen.
+      width: "fit-content",
+      minWidth: POPUP_MIN_WIDTH,
+      maxWidth: POPUP_MAX_WIDTH,
       boxSizing: "border-box",
       background: "var(--background-primary)",
       color: "var(--text-normal)",

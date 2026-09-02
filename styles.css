@@ -147,6 +147,14 @@
   margin-bottom: 8px;
 }
 
+/* 弹窗宽度由内容自适应，但始终限制在可读范围内；极长的连续字符串也要能换行。 */
+.mini-translator-popup .mini-en-line,
+.mini-translator-popup .mini-zh-line,
+.mini-translator-popup .mini-dict-line {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .mini-zh-line:last-child {
   margin-bottom: 0;
 }
