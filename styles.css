@@ -62,6 +62,14 @@
   user-select: text;
 }
 
+.mini-translator-stream-caret {
+  color: var(--interactive-accent);
+  animation: mini-translator-caret-blink 0.8s steps(1) infinite;
+}
+@keyframes mini-translator-caret-blink {
+  50% { opacity: 0; }
+}
+
 /* 中文文本规范：段首缩进两字符；词典释义是条目式，不缩进；可光标选中复制 */
 .mini-zh-line {
   font-size: var(--font-text-size);
@@ -71,6 +79,11 @@
   text-indent: 2em;
   white-space: pre-wrap;
   user-select: text;
+}
+
+.mini-zh-pending {
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 .mini-dict-line {
@@ -275,10 +288,13 @@
 }
 .mini-prog-fill {
   height: 100%;
-  width: 0%;
+  width: 100%;
   border-radius: 6px;
   background: linear-gradient(90deg, var(--text-accent), var(--text-accent-hover));
-  transition: width 0.4s ease;
+  transform: scaleX(0);
+  transform-origin: left center;
+  will-change: transform;
+  transition: transform 0.3s ease;
   position: relative;
   overflow: hidden;
 }
@@ -297,7 +313,11 @@
 }
 .mini-prog-indet .mini-prog-fill {
   width: 35% !important;
+  transition: none;
   animation: mini-prog-slide 1.4s ease-in-out infinite;
+}
+.mini-prog-complete .mini-prog-fill {
+  animation: mini-prog-complete-pulse 0.42s ease-in-out;
 }
 .mini-prog-meta {
   display: flex;
@@ -323,6 +343,10 @@
 @keyframes mini-prog-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+@keyframes mini-prog-complete-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.42); }
 }
 
 /* 进度窗不再自绘 ✕：直接复用 Obsidian 原生关闭按钮（点击走 close() → 未完成转最小化），
@@ -537,6 +561,7 @@
   stroke: var(--translation-orb-value);
   stroke-dashoffset: var(--progress-offset);
   stroke-linecap: round;
+  transition: stroke-dashoffset 0.25s linear;
   filter: drop-shadow(0 0.5px 0 var(--translation-orb-ring-shadow));
 }
 
@@ -552,6 +577,16 @@
 
 .translation-orb[data-translation-orb-state="indeterminate"] .translation-orb__progress {
   animation: translation-orb-progress-spin 1.35s linear infinite;
+}
+
+/* 完成时轻弹一下，反馈进度已同步到 100%；不改变原有皮肤和尺寸缩放。 */
+.translation-orb.is-complete {
+  animation: translation-orb-complete-bounce 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes translation-orb-complete-bounce {
+  0% { transform: scale(1.14); }
+  58% { transform: scale(0.98); }
+  100% { transform: scale(1); }
 }
 
 /* Ink wash: asymmetric, overlapping pigment blooms. */

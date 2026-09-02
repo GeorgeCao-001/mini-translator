@@ -405,6 +405,38 @@ function renderRichText(container, text) {
   }
 }
 
+// ---------- 弹窗流式展示：先以打字机逐字显示，完成后再交给 MathJax 富文本渲染 ----------
+// 翻译接口仍可按整块返回；这个展示层让结果到达后保持“字幕式”反馈，并避免公式被逐字阶段破坏。
+function streamPopupText(el, text, onChange, onDone) {
+  const full = String(text || "");
+  let index = 0;
+  let stopped = false;
+  const draw = () => {
+    if (stopped) return;
+    el.replaceChildren(document.createTextNode(full.slice(0, index)));
+    if (index < full.length) {
+      const caret = document.createElement("span");
+      caret.className = "mini-translator-stream-caret";
+      caret.textContent = "▍";
+      el.appendChild(caret);
+    }
+    onChange?.();
+  };
+  const timer = window.setInterval(() => {
+    index = Math.min(full.length, index + 3 + Math.floor(Math.random() * 2));
+    draw();
+    if (index >= full.length) {
+      window.clearInterval(timer);
+      onDone?.();
+    }
+  }, 40);
+  draw();
+  return () => {
+    stopped = true;
+    window.clearInterval(timer);
+  };
+}
+
 // ---------- 双语成对渲染：原文行弱化，译文行正常，人读的对照排版 ----------
 // 无论原文还是译文、无论来自哪个源，展示前统一过一遍排版处理
 function renderPairsTo(el, pairs) {
@@ -1291,6 +1323,7 @@ class TranslateProgressModal extends Modal {
     const key = `${st.phase || ""}:${st.total}`;
     if (key !== this.animKey) {
       this.animKey = key; // 换阶段（提取→翻译→渲染）重置显示进度
+      this.modalEl.removeClass("mini-prog-complete");
       this.disp = 0;
       this.rate = 0;
       this.real = null;
@@ -1342,8 +1375,14 @@ class TranslateProgressModal extends Modal {
   paint() {
     const st = this._lastSt || {};
     const pct = Math.min(100, Math.round(this.disp * 100));
-    if (this.barFill) this.barFill.style.width = `${pct}%`;
+    if (this.barFill) {
+      // 进度条保持 100% 宽度，仅用合成器 transform 推进，避免每 120ms 重排布局。
+      this.barFill.style.width = "100%";
+      this.barFill.style.transform = `scaleX(${pct / 100})`;
+    }
     if (this.pctEl) this.pctEl.setText(`${pct}%`);
+    if (pct >= 100) this.modalEl.addClass("mini-prog-complete");
+    else this.modalEl.removeClass("mini-prog-complete");
     const bits = [];
     if (st.total) bits.push(`${st.done}/${st.total} 块`);
     if (this.dispTok > 0) bits.push(`≈${fmtTok(this.dispTok)} tokens 已用`);
@@ -3087,17 +3126,102 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   // ---------- 选区旁弹窗 ----------
-  showPopup(text, x, y, via, pending) {
+  _normalizePopupAnchor(x, y, anchor) {
+    const vw = Math.max(1, Number(window.innerWidth) || 1);
+    const vh = Math.max(1, Number(window.innerHeight) || 1);
+    const finite = (value, fallback) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    };
+    // x/y historically meant the requested popup origin (y is selection bottom + 6px).
+    // Keep that fallback for callers that cannot expose a real selection rectangle.
+    const fallbackLeft = finite(x, Math.max(8, (vw - 480) / 2));
+    const fallbackBottom = finite(y, vh / 2) - 6;
+    const left = finite(anchor?.left, fallbackLeft);
+    const top = finite(anchor?.top, Math.max(0, fallbackBottom - 22));
+    const right = finite(anchor?.right, left);
+    const bottom = finite(anchor?.bottom, Math.max(top, fallbackBottom));
+    return {
+      left: Math.min(left, right),
+      top: Math.min(top, bottom),
+      right: Math.max(left, right),
+      bottom: Math.max(top, bottom),
+    };
+  }
+
+  _placePopup(el, anchor = this.lastPopupAnchor) {
+    if (!el || !el.isConnected) return;
+    const margin = 8;
+    const vw = Math.max(1, Number(window.innerWidth) || document.documentElement.clientWidth || 1);
+    const vh = Math.max(1, Number(window.innerHeight) || document.documentElement.clientHeight || 1);
+    let rect = el.getBoundingClientRect();
+    if (this._popupDragged) {
+      // Preserve the existing drag affordance. A manually moved popup is only kept
+      // inside the viewport; automatic above/below placement resumes on next popup.
+      const currentLeft = Number.parseFloat(el.style.left);
+      const currentTop = Number.parseFloat(el.style.top);
+      const maxLeft = Math.max(margin, vw - rect.width - margin);
+      const maxTop = Math.max(margin, vh - rect.height - margin);
+      el.style.left = `${Math.min(maxLeft, Math.max(margin, Number.isFinite(currentLeft) ? currentLeft : rect.left))}px`;
+      el.style.top = `${Math.min(maxTop, Math.max(margin, Number.isFinite(currentTop) ? currentTop : rect.top))}px`;
+      return;
+    }
+    const gap = 8;
+    const a = anchor || this._normalizePopupAnchor(null, null, null);
+    const body = this.popupBodyEl && el.contains(this.popupBodyEl) ? this.popupBodyEl : null;
+    // Re-measure against the natural 50vh cap on every update. This lets a stream grow
+    // and move above the selection, and lets a resized viewport reclaim available space.
+    if (body) body.style.maxHeight = "50vh";
+    rect = el.getBoundingClientRect();
+    const belowTop = a.bottom + gap;
+    const aboveTop = a.top - rect.height - gap;
+    const belowRoom = vh - margin - belowTop;
+    const aboveRoom = a.top - gap - margin;
+    const belowFits = belowTop + rect.height <= vh - margin;
+    const aboveFits = aboveTop >= margin;
+
+    // Below is the default. Only flip above when below would leave any part outside
+    // the viewport and the complete popup fits above the selected text.
+    let placement = "below";
+    if (!belowFits && aboveFits) placement = "above";
+    else if (!belowFits && !aboveFits) {
+      // Extremely tight viewports: use the side with more room and cap the body so
+      // the popup itself stays visible without crossing the selection.
+      placement = aboveRoom > belowRoom ? "above" : "below";
+      const room = Math.max(24, placement === "above" ? aboveRoom : belowRoom);
+      const bodyHeight = body ? body.getBoundingClientRect().height : 0;
+      const chrome = Math.max(0, rect.height - bodyHeight);
+      if (body) body.style.maxHeight = `${Math.max(24, room - chrome)}px`;
+      rect = el.getBoundingClientRect();
+    }
+
+    const maxLeft = Math.max(margin, vw - rect.width - margin);
+    const left = Math.min(maxLeft, Math.max(margin, a.left));
+    const desiredTop = placement === "above" ? a.top - rect.height - gap : belowTop;
+    const maxTop = Math.max(margin, vh - rect.height - margin);
+    // In the normal cases desiredTop is already in range. The final clamp only handles
+    // a viewport smaller than the popup's chrome; body max-height above handles content.
+    const top = Math.min(maxTop, Math.max(margin, desiredTop));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    el.dataset.placement = placement;
+  }
+
+  showPopup(text, x, y, via, pending, anchor = null) {
     this.closePopup();
+    this._popupDragged = false;
     this.lastPopupPos = { x, y };
+    this.lastPopupAnchor = this._normalizePopupAnchor(x, y, anchor);
     const el = document.body.createDiv();
     el.addClass("mini-translator-popup");
     Object.assign(el.style, {
       position: "fixed",
-      left: Math.max(8, x) + "px",
-      top: Math.max(8, y) + "px",
+      left: `${Math.max(8, this.lastPopupAnchor.left)}px`,
+      top: `${Math.max(8, this.lastPopupAnchor.bottom + 8)}px`,
       zIndex: "1000",
-      maxWidth: "480px",
+      width: "min(480px, calc(100vw - 16px))",
+      maxWidth: "calc(100vw - 16px)",
+      boxSizing: "border-box",
       background: "var(--background-primary)",
       color: "var(--text-normal)",
       border: "1px solid var(--background-modifier-border)",
@@ -3137,6 +3261,7 @@ module.exports = class MiniTranslator extends Plugin {
     let oy = 0;
     header.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
+      this._popupDragged = true;
       sx = e.clientX;
       sy = e.clientY;
       const rect = el.getBoundingClientRect();
@@ -3175,14 +3300,10 @@ module.exports = class MiniTranslator extends Plugin {
       body.setText(text);
     }
     document.body.appendChild(el);
-    const rect = el.getBoundingClientRect();
-    if (rect.right > window.innerWidth) {
-      el.style.left = Math.max(8, window.innerWidth - rect.width - 8) + "px";
-    }
-    if (rect.bottom > window.innerHeight) {
-      el.style.top = Math.max(8, window.innerHeight - rect.height - 8) + "px";
-    }
     this.popupEl = el;
+    this._placePopup(el);
+    this._popupResize = () => this._placePopup(this.popupEl);
+    window.addEventListener("resize", this._popupResize);
     this._dismissMouse = (e) => {
       if (this.popupEl && !this.popupEl.contains(e.target)) this.closePopup();
     };
@@ -3197,18 +3318,146 @@ module.exports = class MiniTranslator extends Plugin {
     if (this.pendingLabel) this.pendingLabel.textContent = text;
   }
 
+  _cancelPopupStreams() {
+    this._popupStreamCancel?.(); // compatibility with a popup created before reload
+    this._popupStreamCancel = null;
+    if (this._popupTranslationCancels) {
+      for (const cancel of this._popupTranslationCancels.values()) cancel?.();
+      this._popupTranslationCancels.clear();
+    }
+    this._popupTranslationCancels = null;
+  }
+
+  _refreshPopupText() {
+    const slots = Array.isArray(this._popupSlots) ? this._popupSlots : [];
+    this.lastPopupText = slots
+      .filter((slot) => slot.translated && slot.pair)
+      .map((slot) => `${slot.pair.en}\n${slot.pair.zh}`)
+      .join("\n\n");
+  }
+
+  // Put every source line in the popup immediately. Translation rows start as a
+  // lightweight placeholder and are replaced as each API response arrives.
+  showPopupSources(sources, via = null) {
+    if (!this.popupEl || !this.popupBodyEl) return;
+    this._cancelPopupStreams();
+    const body = this.popupBodyEl;
+    body.replaceChildren();
+    body.classList.add("mini-flow");
+    this._popupSlots = [];
+    this._popupSlotBody = body;
+    for (const source of Array.isArray(sources) ? sources : []) {
+      const item = typeof source === "string" ? { en: source } : source || { en: "" };
+      const en = document.createElement("div");
+      en.className = "mini-en-line";
+      body.appendChild(en);
+      renderRichText(en, typofixEn(item.en || ""));
+
+      const zh = document.createElement("div");
+      zh.className = item.dict
+        ? "mini-dict-line mini-zh-pending"
+        : "mini-zh-line mini-zh-pending";
+      zh.textContent = "翻译中…";
+      body.appendChild(zh);
+      this._popupSlots.push({
+        source: item.en || "",
+        enEl: en,
+        zhEl: zh,
+        pair: null,
+        translated: false,
+      });
+    }
+    this.pendingLabel = null;
+    if (via) {
+      const labelSpan = this.popupHeaderEl?.querySelector("span");
+      if (labelSpan) labelSpan.textContent = `翻译 · ${via}`;
+    }
+    this._refreshPopupText();
+    this._placePopup(this.popupEl);
+  }
+
+  updatePopupTranslation(index, pair, via) {
+    const slot = this._popupSlots?.[index];
+    if (!slot || !slot.zhEl) return;
+    const nextPair = {
+      en: pair?.en || slot.source,
+      zh: String(pair?.zh || ""),
+      dict: !!pair?.dict,
+    };
+    if (
+      slot.translated &&
+      slot.pair &&
+      slot.pair.en === nextPair.en &&
+      slot.pair.zh === nextPair.zh &&
+      slot.pair.dict === nextPair.dict
+    ) {
+      return;
+    }
+
+    if (!this._popupTranslationCancels) this._popupTranslationCancels = new Map();
+    this._popupTranslationCancels.get(index)?.();
+    slot.pair = nextPair;
+    slot.translated = true;
+    const zhEl = slot.zhEl;
+    zhEl.className = nextPair.dict ? "mini-dict-line" : "mini-zh-line";
+    const formatted = typofixZh(nextPair.zh);
+    this._refreshPopupText();
+
+    let cancel = null;
+    cancel = streamPopupText(
+      zhEl,
+      formatted,
+      () => this._placePopup(this.popupEl),
+      () => {
+        if (this._popupTranslationCancels?.get(index) !== cancel) return;
+        this._popupTranslationCancels.delete(index);
+        if (!this.popupEl || !this.popupBodyEl) return;
+        // Stream plain text first, then hand the completed row to MathJax so
+        // formulas are rendered without slowing the first visible characters.
+        zhEl.replaceChildren();
+        renderRichText(zhEl, formatted);
+        this._refreshPopupText();
+        this._placePopup(this.popupEl);
+        window.requestAnimationFrame?.(() => this._placePopup(this.popupEl));
+      }
+    );
+    this._popupTranslationCancels.set(index, cancel);
+    if (via) {
+      const labelSpan = this.popupHeaderEl?.querySelector("span");
+      if (labelSpan) labelSpan.textContent = `翻译 · ${via}`;
+    }
+    this._placePopup(this.popupEl);
+  }
+
   updatePopupPairs(pairs, via) {
     if (!this.popupEl || !this.popupBodyEl) {
       const p = this.lastPopupPos || { x: window.innerWidth - 520, y: 80 };
-      this.showPopup("", p.x, p.y, via);
+      this.showPopup("", p.x, p.y, via, false, this.lastPopupAnchor);
     }
-    const labelSpan = this.popupHeaderEl.querySelector("span");
+    const list = Array.isArray(pairs) ? pairs : [];
+    if (
+      this._popupSlotBody !== this.popupBodyEl ||
+      !Array.isArray(this._popupSlots) ||
+      this._popupSlots.length !== list.length
+    ) {
+      this.showPopupSources(list.map((p) => ({ en: p.en, dict: p.dict })), via);
+    }
+    const labelSpan = this.popupHeaderEl?.querySelector("span");
     if (labelSpan) {
       labelSpan.textContent = via ? `翻译 · ${via}` : "Mini Translator";
     }
     this.pendingLabel = null;
-    this.lastPopupText = pairs.map((p) => p.en + "\n" + p.zh).join("\n\n");
-    renderPairsTo(this.popupBodyEl, pairs);
+    list.forEach((pair, index) => {
+      const slot = this._popupSlots?.[index];
+      const same =
+        slot?.translated &&
+        slot.pair &&
+        slot.pair.en === (pair?.en || slot.source) &&
+        slot.pair.zh === String(pair?.zh || "") &&
+        slot.pair.dict === !!pair?.dict;
+      if (!same) this.updatePopupTranslation(index, pair, via);
+    });
+    this._refreshPopupText();
   }
 
   failPopup(msg) {
@@ -3218,12 +3467,17 @@ module.exports = class MiniTranslator extends Plugin {
     }
     const labelSpan = this.popupHeaderEl.querySelector("span");
     if (labelSpan) labelSpan.textContent = "翻译失败";
+    this._cancelPopupStreams();
     this.pendingLabel = null;
     this.popupBodyEl.empty();
     this.popupBodyEl.setText(msg);
+    this._placePopup(this.popupEl);
   }
 
   closePopup() {
+    this._cancelPopupStreams();
+    this._popupSlots = [];
+    this._popupSlotBody = null;
     if (this.popupEl) {
       this.popupEl.remove();
       this.popupEl = null;
@@ -3236,6 +3490,10 @@ module.exports = class MiniTranslator extends Plugin {
       document.removeEventListener("keydown", this._dismissKey);
       this._dismissKey = null;
     }
+    if (this._popupResize) {
+      window.removeEventListener("resize", this._popupResize);
+      this._popupResize = null;
+    }
   }
 
   // ---------- PDF 选区：三路策略 ----------
@@ -3246,13 +3504,20 @@ module.exports = class MiniTranslator extends Plugin {
       if (!text) return null;
       let x = null;
       let y = null;
+      let anchor = null;
       if (sel.rangeCount > 0) {
         const r = sel.getRangeAt(0).getBoundingClientRect();
         const b = iframe.getBoundingClientRect();
-        x = b.left + r.left;
-        y = b.top + r.bottom + 6;
+        anchor = {
+          left: b.left + r.left,
+          top: b.top + r.top,
+          right: b.left + r.right,
+          bottom: b.top + r.bottom,
+        };
+        x = anchor.left;
+        y = anchor.bottom + 6;
       }
-      return { text, x, y };
+      return { text, x, y, anchor };
     } catch (e) {
       console.log("[mini-translator] iframe 读取失败:", e);
       return null;
@@ -3268,7 +3533,15 @@ module.exports = class MiniTranslator extends Plugin {
       const t = mainSel.toString().trim();
       if (t) {
         const r = mainSel.getRangeAt(0).getBoundingClientRect();
-        tried.push(["主窗口选区", { text: t, x: r.left, y: r.bottom + 6 }]);
+        tried.push([
+          "主窗口选区",
+          {
+            text: t,
+            x: r.left,
+            y: r.bottom + 6,
+            anchor: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+          },
+        ]);
       }
     }
     // 策略2：焦点元素是 iframe
@@ -3309,24 +3582,44 @@ module.exports = class MiniTranslator extends Plugin {
     let text = "";
     let x = null;
     let y = null;
+    let anchor = null;
     if (mdView && mdView.editor) {
       text = (mdView.editor.getSelection() || "").trim();
-      const pos = mdView.editor.getCursor("to");
-      let coords = mdView.editor.coordsAtPos(pos, "window");
-      let isWindow = true;
-      if (!coords) {
-        coords = mdView.editor.coordsAtPos(pos, "local");
-        isWindow = false;
-      }
-      if (coords) {
-        if (isWindow) {
-          x = coords.left;
-          y = coords.bottom + 6;
-        } else {
-          const base = mdView.editor.containerEl.getBoundingClientRect();
-          x = base.left + coords.left;
-          y = base.top + coords.bottom + 6;
+      const editor = mdView.editor;
+      const from = editor.getCursor("from");
+      const to = editor.getCursor("to");
+      const readCoords = (pos, mode) => {
+        try {
+          const c = editor.coordsAtPos(pos, mode);
+          if (!c) return null;
+          const base = mode === "window" ? null : editor.containerEl.getBoundingClientRect();
+          const left = Number(c.left);
+          const right = Number(c.right);
+          const top = Number(c.top);
+          const bottom = Number(c.bottom);
+          return {
+            left: (Number.isFinite(left) ? left : 0) + (base ? base.left : 0),
+            right: (Number.isFinite(right) ? right : left) + (base ? base.left : 0),
+            top: (Number.isFinite(top) ? top : 0) + (base ? base.top : 0),
+            bottom: (Number.isFinite(bottom) ? bottom : top) + (base ? base.top : 0),
+          };
+        } catch (e) {
+          return null;
         }
+      };
+      let points = [readCoords(from, "window"), readCoords(to, "window")].filter(Boolean);
+      if (!points.length) {
+        points = [readCoords(from, "local"), readCoords(to, "local")].filter(Boolean);
+      }
+      if (points.length) {
+        anchor = {
+          left: Math.min(...points.map((p) => p.left)),
+          top: Math.min(...points.map((p) => p.top)),
+          right: Math.max(...points.map((p) => Number.isFinite(p.right) ? p.right : p.left)),
+          bottom: Math.max(...points.map((p) => p.bottom)),
+        };
+        x = anchor.left;
+        y = anchor.bottom + 6;
       }
     } else {
       const info = this.getPdfSelectionInfo();
@@ -3334,6 +3627,7 @@ module.exports = class MiniTranslator extends Plugin {
         text = info.text;
         x = info.x;
         y = info.y;
+        anchor = info.anchor || null;
       }
     }
     if (!text) {
@@ -3345,7 +3639,15 @@ module.exports = class MiniTranslator extends Plugin {
     // 立刻弹窗（等待动画），结果到了原地填充
     const px = x != null ? x : window.innerWidth - 520;
     const py = y != null ? y : 80;
-    this.showPopup("", px, py, null, true);
+    this.showPopup("", px, py, null, true, anchor);
+    const isWord = WORD_RE.test(text);
+    const sentenceList = !isWord && mode !== "paragraph" ? splitSentences(text) : null;
+    // 原文不再等待翻译结果或打字机动画：先把所有可确定的原文行放进去，
+    // 后续每个 API 响应只负责填充对应译文行。
+    this.showPopupSources(
+      isWord || mode === "paragraph" ? [text] : sentenceList,
+      null
+    );
     const t0 = Date.now();
     try {
       // 公式重建已合并进 TRANSLATE_PROMPT：大模型源在翻译的同一次请求里恢复破损数学，
@@ -3355,12 +3657,14 @@ module.exports = class MiniTranslator extends Plugin {
       // 数据层统一重排版：词典保留每词性一行；句子/段落译文重排为自然段落
       const fmtDict = (t) => typofixZh(t);
       const fmtFlow = (t) => reflowZh(t);
-      if (WORD_RE.test(text)) {
+      if (isWord) {
         const r = await cached(
           `dict:${sourceKey(this.settings.dictSource)}:${text}`,
           () => dictLookup(text, this.settings.dictSource)
         );
-        pairs.push({ en: typofixEn(text), zh: fmtDict(r.text), dict: true });
+        const pair = { en: typofixEn(text), zh: fmtDict(r.text), dict: true };
+        pairs.push(pair);
+        this.updatePopupTranslation(0, pair, r.via);
         via = r.via;
       } else if (mode === "paragraph") {
         // 整段翻译：一次请求，原文段与译文段上下对照
@@ -3368,22 +3672,23 @@ module.exports = class MiniTranslator extends Plugin {
           `src:${sourceKey(this.settings.primarySource)}:${text}`,
           () => translateSentence(text, this.settings.primarySource)
         );
-        pairs.push({ en: typofixEn(text), zh: fmtFlow(r.text) });
+        const pair = { en: typofixEn(text), zh: fmtFlow(r.text) };
+        pairs.push(pair);
+        this.updatePopupTranslation(0, pair, r.via);
         via = r.via;
       } else {
         // 逐句独立翻译 → 原文译文逐句天然对齐
-        const sentences = splitSentences(text);
+        const sentences = sentenceList || splitSentences(text);
         const vias = new Set();
         for (let i = 0; i < sentences.length; i++) {
           const r = await cached(
             `src:${sourceKey(this.settings.primarySource)}:${sentences[i]}`,
             () => translateSentence(sentences[i], this.settings.primarySource)
           );
-          pairs.push({ en: typofixEn(sentences[i]), zh: fmtFlow(r.text) });
+          const pair = { en: typofixEn(sentences[i]), zh: fmtFlow(r.text) };
+          pairs.push(pair);
+          this.updatePopupTranslation(i, pair, r.via);
           vias.add(r.via);
-          if (sentences.length > 1) {
-            this.updatePending(`翻译中 ${i + 1}/${sentences.length}…`);
-          }
         }
         via = Array.from(vias).join("/");
       }

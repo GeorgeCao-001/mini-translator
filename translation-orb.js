@@ -221,6 +221,7 @@ class TranslationOrbController {
     this._listeners = [];
     this._themeObserver = null;
     this._drag = null;
+    this._completionPulseTimer = null;
     this._destroyed = false;
     this._onPointerDown = this._onPointerDown.bind(this);
     this._onPointerMove = this._onPointerMove.bind(this);
@@ -283,6 +284,7 @@ class TranslationOrbController {
   setProgress(value, notify = true) {
     if (value == null) {
       this.state.progress = null;
+      this._clearCompletionPulse();
       if (this.orb) {
         this.orb.dataset.translationOrbState = "indeterminate";
         this.orb.removeAttribute("aria-valuenow");
@@ -292,6 +294,7 @@ class TranslationOrbController {
       const numeric = Number(value);
       if (!Number.isFinite(numeric)) throw new TypeError("Progress must be a finite number or null");
       const progress = clamp(numeric, 0, 100);
+      const previousProgress = this.state.progress;
       this.state.progress = progress;
       if (this.orb) {
         this.orb.dataset.translationOrbState = "determinate";
@@ -299,6 +302,8 @@ class TranslationOrbController {
         this.orb.setAttribute("aria-valuenow", String(progress));
         this.orb.setAttribute("aria-label", `正在翻译，进度 ${Math.round(progress)}%`);
       }
+      if (progress >= 100 && previousProgress !== 100) this._pulseCompletion();
+      else if (progress < 100) this._clearCompletionPulse();
     }
     if (notify) this._notify("progress");
     return this;
@@ -382,6 +387,26 @@ class TranslationOrbController {
     });
   }
 
+  _clearCompletionPulse() {
+    if (this._completionPulseTimer != null) {
+      this.window.clearTimeout(this._completionPulseTimer);
+      this._completionPulseTimer = null;
+    }
+    this.orb?.classList.remove("is-complete");
+  }
+
+  _pulseCompletion() {
+    this._clearCompletionPulse();
+    if (!this.orb || this._destroyed) return;
+    // Force a reflow so repeated stage completions can replay the same bounce.
+    void this.orb.offsetWidth;
+    this.orb.classList.add("is-complete");
+    this._completionPulseTimer = this.window.setTimeout(() => {
+      this._completionPulseTimer = null;
+      this.orb?.classList.remove("is-complete");
+    }, 650);
+  }
+
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
@@ -392,6 +417,7 @@ class TranslationOrbController {
     this._themeObserver?.disconnect();
     this._themeObserver = null;
     this._drag = null;
+    this._clearCompletionPulse();
     const inkWater = this.orb?.querySelector?.(".translation-orb__ink-water");
     if (inkWater) destroyInkWaterElement(inkWater);
     this.host?.remove();
