@@ -1,4 +1,6 @@
-// Mini Translator v3.0.29 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.30 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.30：自动划词翻译增加低打扰取消机制：等待期间点击任意位置或按 Esc 即可取消，
+//         翻译悬浮窗增加明确的关闭/取消按钮，并校验选区在等待期间未发生变化；
 // v3.0.29：翻译悬浮窗改为内容自适应宽度，短句更紧凑、长句限制在可读范围内；
 // v3.0.28：悬浮窗恢复一次性高质量译文输出，等待阶段用三个动态圆点提示；
 //         保留完整选区一次请求和紧凑弹窗，避免把服务端批量响应硬做成难看的流式动画。
@@ -2722,6 +2724,7 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.settings.autoTranslate).onChange(async (v) => {
           this.plugin.settings.autoTranslate = v;
+          if (!v) this.plugin.cancelAutoTranslate();
           await this.plugin.saveData(this.plugin.settings);
         })
       );
@@ -2943,11 +2946,23 @@ module.exports = class MiniTranslator extends Plugin {
       name: "切换划线自动翻译",
       callback: async () => {
         this.settings.autoTranslate = !this.settings.autoTranslate;
+        if (!this.settings.autoTranslate) this.cancelAutoTranslate();
         await this.saveData(this.settings);
         new Notice(
           `划线自动翻译：${this.settings.autoTranslate ? "开" : "关"}`,
           2000
         );
+      },
+    });
+
+    this.addCommand({
+      id: "cancel-selection-translation",
+      name: "取消当前划词翻译",
+      callback: () => {
+        const hadPending = this.cancelAutoTranslate();
+        const hadPopup = !!this.popupEl;
+        if (hadPopup) this.closePopup();
+        if (hadPending || hadPopup) new Notice("已取消当前划词翻译", 1500);
       },
     });
 
@@ -3029,6 +3044,15 @@ module.exports = class MiniTranslator extends Plugin {
     this.registerDomEvent(document, "selectionchange", () =>
       this.onSelectionChanged()
     );
+    // 选择尚未触发翻译时，任何新的指针操作都视为用户改变了意图：静默取消等待。
+    // 这样误划后点回正文/工具栏即可撤销，不需要等计时器跑完，也不会弹出多余提示。
+    this.registerDomEvent(document, "pointerdown", () =>
+      this.cancelAutoTranslate()
+    );
+    // Esc 是等待阶段最明确的取消键；弹窗打开后仍由弹窗自己的 Esc 监听负责关闭。
+    this.registerDomEvent(document, "keydown", (e) => {
+      if (e.key === "Escape") this.cancelAutoTranslate();
+    });
   }
 
   // ---------- 全文翻译取消中枢：requestFtCancel 通过 Promise.race 立即失效在途请求 ----------
@@ -3047,7 +3071,7 @@ module.exports = class MiniTranslator extends Plugin {
 
   onunload() {
     this.closePopup();
-    if (this.dwellTimer) clearTimeout(this.dwellTimer);
+    this.cancelAutoTranslate();
     SOURCE_SYNC_LISTENERS.clear(); // 禁用插件时清空中枢订阅
   }
 
@@ -3057,9 +3081,19 @@ module.exports = class MiniTranslator extends Plugin {
     broadcastSources("refresh");
   }
 
+  // 只取消“停留等待”阶段，不主动清掉用户当前选区；若弹窗已经出现，
+  // Esc / 点击外部 / 右上角 × 会通过 closePopup 递增 _popupRunId，令在途结果失效。
+  cancelAutoTranslate() {
+    const hadPending = this.dwellTimer != null;
+    if (hadPending) clearTimeout(this.dwellTimer);
+    this.dwellTimer = null;
+    this._autoTranslatePending = null;
+    return hadPending;
+  }
+
   onSelectionChanged() {
+    this.cancelAutoTranslate();
     if (!this.settings.autoTranslate) return;
-    if (this.dwellTimer) clearTimeout(this.dwellTimer);
     const sel = window.getSelection();
     const t = ((sel && sel.toString()) || "").trim();
     if (!t || !/[a-zA-Z]/.test(t)) return;
@@ -3068,11 +3102,17 @@ module.exports = class MiniTranslator extends Plugin {
       return;
     }
     const delay = (this.settings.autoTranslateDelay ?? 2) * 1000;
+    // 用对象 token 防止一个已经排队但未被及时清理的旧回调误触发。
+    const pendingToken = { text: t };
+    this._autoTranslatePending = pendingToken;
     this.dwellTimer = setTimeout(() => {
+      if (this._autoTranslatePending !== pendingToken) return;
       this.dwellTimer = null;
+      this._autoTranslatePending = null;
       const cur = window.getSelection();
       const curText = ((cur && cur.toString()) || "").trim();
-      if (!curText || !/[a-zA-Z]/.test(curText)) return;
+      // 必须仍是同一段选区；误划后重新拖动/点击不会把旧选区送进翻译。
+      if (!curText || curText !== pendingToken.text || !/[a-zA-Z]/.test(curText)) return;
       this.translateSelection("paragraph");
     }, delay);
   }
@@ -3261,12 +3301,36 @@ module.exports = class MiniTranslator extends Plugin {
     const copyBtn = header.createSpan({ text: "复制" });
     copyBtn.style.cursor = "pointer";
     copyBtn.style.marginLeft = "auto";
+    copyBtn.setAttribute("aria-label", "复制译文");
+    copyBtn.onmousedown = (e) => e.stopPropagation();
     copyBtn.onclick = async () => {
       if (this.lastPopupText) {
         await navigator.clipboard.writeText(this.lastPopupText);
         new Notice("已复制", 1500);
       }
     };
+    const closeBtn = header.createSpan({ text: "×" });
+    closeBtn.className = "mini-popup-close";
+    closeBtn.setAttribute("role", "button");
+    closeBtn.tabIndex = 0;
+    closeBtn.setAttribute("aria-label", "关闭翻译弹窗");
+    closeBtn.title = pending ? "取消翻译" : "关闭";
+    closeBtn.style.cursor = "pointer";
+    closeBtn.style.marginLeft = "10px";
+    closeBtn.style.fontSize = "18px";
+    closeBtn.style.lineHeight = "1";
+    closeBtn.onmousedown = (e) => e.stopPropagation();
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      this.closePopup();
+    };
+    closeBtn.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        this.closePopup();
+      }
+    };
+    this.popupCloseBtn = closeBtn;
     // 拖动：按住头部任意空白处移动
     header.style.cursor = "move";
     header.style.userSelect = "none";
