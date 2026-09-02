@@ -1,7 +1,6 @@
-// Mini Translator v3.0.27 — 对标 Translate for Zotero 的零配置翻译插件
-// v3.0.27：悬浮窗改为真实 SSE 流式译文——整段请求保证上下文质量，收到的累计结果
-//         立即替换当前译文行；缓存命中直接显示，不再播放打字机动画；弹窗更紧凑
-//         并在流式请求结束后用最终结果覆盖暂态文本。
+// Mini Translator v3.0.28 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.28：悬浮窗恢复一次性高质量译文输出，等待阶段用三个动态圆点提示；
+//         保留完整选区一次请求和紧凑弹窗，避免把服务端批量响应硬做成难看的流式动画。
 // v3.0.26：悬浮球动效增强——新增全局旋转流光（core 内锥形楔块绕核扫过）、光晕掺金
 //         呼吸、整球轻浮动、高光透明度起伏，各皮肤动画幅度与频率加大（动态感更明显）；
 //         边缘加淡金描边：外圈 1px 锥形渐变金环（mask 环形镂空）+ 内缘香槟金描边 +
@@ -2316,224 +2315,6 @@ async function llmRequest(text, profile, systemPrompt) {
   return out;
 }
 
-// OpenAI-compatible SSE。这里不把网络响应改造成“打字机”动画，而是每收到一块
-// 已经生成的译文就回调一次；回调方始终用最新整段文本替换当前行，因此供应商若
-// 在后续事件里给出修订后的整段内容，也能覆盖早先不完整的结果。
-async function llmRequestStream(text, profile, systemPrompt, onPartial) {
-  const model = profile.activeModel || (profile.models && profile.models[0]);
-  if (!model) throw new Error("未选择模型：请先在设置里查询或添加模型");
-  const target = new URL(profile.url);
-  if (target.protocol !== "http:" && target.protocol !== "https:") {
-    throw new Error("大模型接口必须使用 http(s) 地址");
-  }
-  const transport = require(target.protocol === "https:" ? "https" : "http");
-  const payload = JSON.stringify({
-    model,
-    temperature: 0.3,
-    stream: true,
-    messages: [
-      { role: "system", content: systemPrompt || TRANSLATE_PROMPT },
-      { role: "user", content: text },
-    ],
-  });
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let full = "";
-    let lineBuffer = "";
-    const rawChunks = [];
-    let sawSse = false;
-    let responseStatus = 0;
-    let messageMode = null;
-    let req = null;
-
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error);
-      else resolve(value);
-    };
-    const appendPiece = (choice) => {
-      if (!choice) return;
-      let piece = "";
-      let replace = false;
-      if (choice.delta && choice.delta.content != null) {
-        piece = llmContentToText(choice.delta.content);
-      } else if (choice.message && choice.message.content != null) {
-        // 一些兼容服务在 stream=true 时发送“截至目前的整段 message”。
-        piece = llmContentToText(choice.message.content);
-        replace = true;
-      } else if (choice.text != null) {
-        piece = llmContentToText(choice.text);
-      }
-      if (!piece) return;
-      if (replace) {
-        // 兼容两类非标准服务：message 可能是增量，也可能是截至目前的整段。
-        // 第二个事件即可判定；一旦确认整段模式，后续修订会覆盖旧内容。
-        if (!full) {
-          full = piece;
-        } else if (messageMode === "delta") {
-          full += piece;
-        } else if (piece.startsWith(full)) {
-          full = piece;
-          messageMode = "snapshot";
-        } else if (full.startsWith(piece)) {
-          return;
-        } else if (messageMode === "snapshot") {
-          full = piece;
-        } else if (/^\s/.test(piece)) {
-          // 增量 message 通常以空格开头（英文 token），保留这种兼容模式。
-          full += piece;
-          messageMode = "delta";
-        } else {
-          // 没有共同前缀的后续 message 更像一次修订后的整段文本，允许覆盖。
-          full = piece;
-          messageMode = "snapshot";
-        }
-      } else {
-        // 少数服务把整段快照放在 delta.content 中；明显是前缀快照时直接替换。
-        if (full && piece.startsWith(full) && piece.length > full.length) full = piece;
-        else full += piece;
-      }
-      try {
-        onPartial?.(full);
-      } catch (e) {
-        console.warn("[mini-translator] 流式译文回调失败:", e);
-      }
-    };
-    const parsePayload = (payloadText) => {
-      const value = payloadText.trim();
-      if (!value || value === "[DONE]") return;
-      let data;
-      try {
-        data = JSON.parse(value);
-      } catch (e) {
-        // SSE 之外的非 JSON 行（例如 keep-alive）直接忽略。
-        return;
-      }
-      if (data?.error) {
-        finish(new Error(data.error.message || JSON.stringify(data.error)));
-        return;
-      }
-      appendPiece(data?.choices?.[0]);
-    };
-    const processLine = (line) => {
-      const normalized = String(line || "").replace(/\r$/, "");
-      if (!normalized.trimStart().startsWith("data:")) return;
-      sawSse = true;
-      parsePayload(normalized.slice(normalized.indexOf(":") + 1));
-    };
-    const processChunk = (chunk) => {
-      const value = String(chunk || "");
-      rawChunks.push(value);
-      lineBuffer += value;
-      let newline = lineBuffer.indexOf("\n");
-      while (newline >= 0) {
-        processLine(lineBuffer.slice(0, newline));
-        lineBuffer = lineBuffer.slice(newline + 1);
-        newline = lineBuffer.indexOf("\n");
-      }
-    };
-
-    try {
-      req = transport.request(
-        {
-          hostname: target.hostname,
-          port: target.port || undefined,
-          path: `${target.pathname || "/"}${target.search || ""}`,
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "text/event-stream",
-            authorization: `Bearer ${profile.apiKey}`,
-            "content-length": Buffer.byteLength(payload),
-          },
-        },
-        (res) => {
-          responseStatus = Number(res.statusCode) || 0;
-          res.setEncoding("utf8");
-          res.on("data", processChunk);
-          res.on("error", (error) => finish(error));
-          res.on("end", () => {
-            if (lineBuffer) processLine(lineBuffer);
-            if (settled) return;
-            const raw = rawChunks.join("");
-            if (responseStatus < 200 || responseStatus >= 300) {
-              let message = raw.slice(0, 300);
-              try {
-                const data = JSON.parse(raw);
-                message = data?.error?.message || message;
-              } catch (e) {}
-              finish(new Error(`HTTP ${responseStatus || "?"} (大模型): ${message}`));
-              return;
-            }
-            // 兼容不支持 SSE、却返回普通 JSON 的 OpenAI 兼容服务。
-            if (!full && !sawSse) {
-              try {
-                const data = JSON.parse(raw);
-                const choice = data?.choices?.[0];
-                appendPiece({
-                  message: { content: choice?.message?.content ?? choice?.text },
-                });
-              } catch (e) {}
-            }
-            if (!full) {
-              finish(new Error("大模型流式响应为空"));
-              return;
-            }
-            finish(null, cleanLlmOutput(full));
-          });
-        }
-      );
-      req.setTimeout(120000, () => {
-        req.destroy();
-        finish(new Error("大模型流式请求超时"));
-      });
-      req.on("error", (error) => finish(error));
-      req.write(payload);
-      req.end();
-    } catch (e) {
-      finish(e);
-    }
-  });
-}
-
-function restoreMathPartial(text, map) {
-  // 占位符可能被 SSE 切在两个事件之间；隐藏未闭合的尾部，下一块到达后再还原。
-  const safe = String(text || "").replace(/⟦MT\d*$/, "");
-  return restoreMath(safe, map);
-}
-
-async function llmTextStreaming(text, primary, systemPrompt, onPartial) {
-  const prof = findProfile(primary);
-  if (!prof) throw new Error("当前翻译源不是大模型配置");
-  const { text: safeText, map } = protectMath(text);
-  try {
-    const out = await llmRequestStream(safeText, prof, systemPrompt, (partial) =>
-      onPartial?.(restoreMathPartial(partial, map))
-    );
-    return { text: restoreMath(out, map), via: prof.name };
-  } catch (e) {
-    // 流式端点不兼容时回退到一次性请求；已经显示的部分会被最终译文直接覆盖。
-    console.warn("[mini-translator] 流式接口失败，改用普通请求:", e.message || e);
-    return {
-      text: restoreMath(await llmRequest(safeText, prof, systemPrompt), map),
-      via: prof.name,
-    };
-  }
-}
-
-async function translateSentenceStreaming(text, primary, onPartial) {
-  return llmTextStreaming(text, primary, TRANSLATE_PROMPT, onPartial);
-}
-
-async function dictLookupStreaming(word, primary, onPartial) {
-  const prof = findProfile(primary);
-  return prof
-    ? llmTextStreaming(word, primary, DICT_PROMPT, onPartial)
-    : dictLookup(word, primary);
-}
-
 // ---------- 引擎注册表：新增引擎 = 写一个 translate 函数 + 在这里加一行 ----------
 // 未来加其他 LLM（OpenAI 兼容 API）：照抄 deepseekTranslate 改 URL/模型即可。
 const ENGINES = [
@@ -3575,11 +3356,20 @@ module.exports = class MiniTranslator extends Plugin {
       renderRichText(en, typofixEn(item.en || ""));
 
       const zh = document.createElement("div");
+      const waiting = item.waiting !== false;
       zh.className = item.dict
-        ? "mini-dict-line mini-zh-pending"
-        : "mini-zh-line mini-zh-pending";
-      // 头部已经显示“翻译中…”，行内只留一个轻量占位符，避免小弹窗被重复文字撑长。
-      zh.textContent = "…";
+        ? `mini-dict-line${waiting ? " mini-zh-pending" : ""}`
+        : `mini-zh-line${waiting ? " mini-zh-pending" : ""}`;
+      if (waiting) {
+        // 头部已经显示“翻译中…”，行内用三个动态圆点提示等待，避免重复长文字。
+        const dots = document.createElement("span");
+        dots.className = "mini-translator-waiting-dots";
+        dots.setAttribute("aria-label", "翻译中");
+        for (let i = 0; i < 3; i++) {
+          dots.appendChild(document.createElement("i"));
+        }
+        zh.appendChild(dots);
+      }
       body.appendChild(zh);
       this._popupSlots.push({
         source: item.en || "",
@@ -3632,34 +3422,6 @@ module.exports = class MiniTranslator extends Plugin {
     }
     this._placePopup(this.popupEl);
     window.requestAnimationFrame?.(() => this._placePopup(this.popupEl));
-  }
-
-  // 真实 SSE 到达的最新累计译文直接替换当前行。这里不做逐字动画，也不把每个
-  // 网络事件当作独立句子；后续事件若是修订后的整段内容，可以自然覆盖前一版。
-  updatePopupPartial(index, pair, via) {
-    const slot = this._popupSlots?.[index];
-    if (!slot || !slot.zhEl) return;
-    const nextPair = {
-      en: pair?.en || slot.source,
-      zh: String(pair?.zh || ""),
-      dict: !!pair?.dict,
-    };
-    slot.pair = nextPair;
-    slot.translated = true;
-    slot.final = false;
-    const zhEl = slot.zhEl;
-    zhEl.className = nextPair.dict
-      ? "mini-dict-line"
-      : "mini-zh-line";
-    // Partial output may contain an unfinished LaTeX delimiter. Keep it as plain text
-    // until the final event, while still showing every useful character immediately.
-    zhEl.textContent = nextPair.zh;
-    this._refreshPopupText();
-    if (via) {
-      const labelSpan = this.popupHeaderEl?.querySelector("span");
-      if (labelSpan) labelSpan.textContent = `翻译 · ${via}`;
-    }
-    this._placePopup(this.popupEl);
   }
 
   updatePopupPairs(pairs, via) {
@@ -3871,21 +3633,32 @@ module.exports = class MiniTranslator extends Plugin {
     }
     // 源文本规范化：清不可见字符 + 把 Unicode 数学子/上标字母还原为 ASCII
     text = demathify(cleanInvisibles(text));
-    // 立刻弹窗；译文会在网络流真正到达时直接填充，不额外等待或播放打字机动画。
+    // 立刻弹窗；译文返回后直接填充，不额外等待或播放打字机动画。
     const px = x != null ? x : window.innerWidth - 520;
     const py = y != null ? y : 80;
-    this.showPopup("", px, py, null, true, anchor);
     const isWord = WORD_RE.test(text);
     const sentenceList = !isWord && mode !== "paragraph" ? splitSentences(text) : null;
-    const dictProfile = findProfile(this.settings.dictSource);
     const translateProfile = findProfile(this.settings.primarySource);
-    // 大模型必须一次收到完整选区，才能利用上下文并在后续事件里修订译文；
-    // 只有不支持流式的大模型以外置引擎时，才保留逐句对齐的展示方式。
-    const streamWhole = !isWord && !!translateProfile;
+    // 大模型（无论“逐句”还是“整段”命令）一次收到完整选区，保证上下文质量；
+    // 只有内置非流式引擎才保留逐句对齐。
+    const wholeText = !isWord && (!!translateProfile || mode === "paragraph");
     const sourceLines =
-      isWord || mode === "paragraph" || streamWhole ? [text] : sentenceList;
+      isWord || wholeText ? [text] : sentenceList;
+    const sourceEntries = sourceLines.map((source) => {
+      const value = typeof source === "string" ? source : source?.en || "";
+      const key = isWord
+        ? `dict:${sourceKey(this.settings.dictSource)}:${value}`
+        : `src:${sourceKey(this.settings.primarySource)}:${value}`;
+      return {
+        en: value,
+        dict: isWord,
+        waiting: !CACHE.has(key),
+      };
+    });
+    const pending = sourceEntries.some((entry) => entry.waiting);
+    this.showPopup("", px, py, null, pending, anchor);
     // 原文不再等待翻译结果：先把所有可确定的原文行放进去，后续只替换译文行。
-    this.showPopupSources(sourceLines, null);
+    this.showPopupSources(sourceEntries, null);
     const popupRunId = this._popupRunId;
     const t0 = Date.now();
     try {
@@ -3894,79 +3667,26 @@ module.exports = class MiniTranslator extends Plugin {
       // 数据层统一重排版：词典保留每词性一行；句子/段落译文重排为自然段落
       const fmtDict = (t) => typofixZh(t);
       const fmtFlow = (t) => reflowZh(t);
-      const putCache = (key, value) => {
-        if (CACHE.size >= CACHE_MAX && !CACHE.has(key)) {
-          CACHE.delete(CACHE.keys().next().value);
-        }
-        CACHE.set(key, value);
-        return value;
-      };
-      // 一次完整请求 + SSE 增量。每个回调拿到的是当前累计（或修订后的）整段，
-      // 因而 UI 可以覆盖上一版而不会把一个词/一句话当成独立翻译请求。
-      const streamOne = async ({ key, source, primary, index, dict, format }) => {
-        const profile = findProfile(primary);
-        if (!profile) return null;
-        let r;
-        if (CACHE.has(key)) {
-          // 缓存命中直接显示最终结果，绝不播放任何动画。
-          r = CACHE.get(key);
-        } else {
-          const onPartial = (partial) => {
-            if (this._popupRunId !== popupRunId) return;
-            this.updatePopupPartial(
-              index,
-              {
-                en: typofixEn(source),
-                zh: format(partial),
-                dict,
-              },
-              profile.name
-            );
-          };
-          r = dict
-            ? await dictLookupStreaming(source, primary, onPartial)
-            : await translateSentenceStreaming(source, primary, onPartial);
-          putCache(key, r);
-        }
-        if (this._popupRunId === popupRunId) {
-          this.updatePopupTranslation(
-            index,
-            { en: typofixEn(source), zh: format(r.text), dict },
-            r.via || profile.name
-          );
-        }
-        return r;
-      };
       if (isWord) {
         const key = `dict:${sourceKey(this.settings.dictSource)}:${text}`;
-        const r = dictProfile
-          ? await streamOne({
-              key,
-              source: text,
-              primary: this.settings.dictSource,
-              index: 0,
-              dict: true,
-              format: fmtDict,
-            })
-          : await cached(key, () => dictLookup(text, this.settings.dictSource));
+        const r = await cached(key, () => dictLookup(text, this.settings.dictSource));
         const pair = { en: typofixEn(text), zh: fmtDict(r.text), dict: true };
         pairs.push(pair);
         if (this._popupRunId === popupRunId) {
           this.updatePopupTranslation(0, pair, r.via);
         }
         via = r.via;
-      } else if (streamWhole) {
+      } else if (wholeText) {
         const key = `src:${sourceKey(this.settings.primarySource)}:${text}`;
-        const r = await streamOne({
+        const r = await cached(
           key,
-          source: text,
-          primary: this.settings.primarySource,
-          index: 0,
-          dict: false,
-          format: fmtFlow,
-        });
+          () => translateSentence(text, this.settings.primarySource)
+        );
         const pair = { en: typofixEn(text), zh: fmtFlow(r.text) };
         pairs.push(pair);
+        if (this._popupRunId === popupRunId) {
+          this.updatePopupTranslation(0, pair, r.via);
+        }
         via = r.via;
       } else if (mode === "paragraph") {
         // 整段翻译：一次请求，原文段与译文段上下对照
