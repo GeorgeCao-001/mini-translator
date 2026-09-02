@@ -1,12 +1,21 @@
 "use strict";
 
+const { createInkWaterElement, destroyInkWaterElement } = require("./ink-water-orb.js");
+
 const DEFAULT_SKIN_ID = "ink-wash";
 const ORB_SIZE = 40;
+const MIN_ORB_SIZE = 28;
+const MAX_ORB_SIZE = 96;
 const DEFAULT_MARGIN = 12;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeSize(value) {
+  const numeric = Number(value);
+  return clamp(Number.isFinite(numeric) ? numeric : ORB_SIZE, MIN_ORB_SIZE, MAX_ORB_SIZE);
 }
 
 function clampPosition(position, viewport, size = ORB_SIZE, margin = DEFAULT_MARGIN) {
@@ -92,8 +101,8 @@ class TranslationOrbSkinRegistry {
 const BUILTIN_SKINS = [
   {
     id: "ink-wash",
-    label: "水墨晕染",
-    description: "不对称墨团缓慢呼吸，边缘保留湿润的灰阶层次。",
+    label: "水墨游鱼",
+    description: "墨环、池水与三尾墨鲤自由游动；不使用最外围绕圈的大鱼。",
     tokens: {
       light: { "--translation-orb-shell": "#d9dddb", "--translation-orb-tone-a": "#374045", "--translation-orb-tone-b": "#7f8b8e", "--translation-orb-tone-c": "#c1c6c2", "--translation-orb-accent": "#56646a", "--translation-orb-track": "rgb(31 39 41 / 0.22)", "--translation-orb-value": "#263238", "--translation-orb-ring-shadow": "rgb(255 255 255 / 0.8)" },
       dark: { "--translation-orb-shell": "#202627", "--translation-orb-tone-a": "#c4cece", "--translation-orb-tone-b": "#6e7c7e", "--translation-orb-tone-c": "#3f4948", "--translation-orb-accent": "#91a3a4", "--translation-orb-track": "rgb(230 238 236 / 0.28)", "--translation-orb-value": "#e5efed", "--translation-orb-ring-shadow": "rgb(0 0 0 / 0.7)" }
@@ -180,6 +189,7 @@ function createOrbElement(documentRef) {
     svg.append(circle);
   }
   orb.append(svg);
+  orb.append(createInkWaterElement(documentRef));
   return orb;
 }
 
@@ -198,6 +208,7 @@ class TranslationOrbController {
       visible: options.visible !== false,
       skin: options.skin || DEFAULT_SKIN_ID,
       surface: ["auto", "light", "dark"].includes(options.surface) ? options.surface : "auto",
+      size: normalizeSize(options.size),
       progress: options.progress == null ? null : clamp(Number(options.progress) || 0, 0, 100),
       position: options.position && Number.isFinite(Number(options.position.x)) && Number.isFinite(Number(options.position.y))
         ? { x: Number(options.position.x), y: Number(options.position.y) }
@@ -243,6 +254,7 @@ class TranslationOrbController {
 
     this.setSkin(this.state.skin, false);
     this.setSurface(this.state.surface, false);
+    this.setSize(this.state.size, false);
     this.setProgress(this.state.progress, false);
     if (this.state.position) this.setPosition(this.state.position, false);
     else this.resetPosition(false);
@@ -322,8 +334,28 @@ class TranslationOrbController {
     return this.registry.list();
   }
 
+  setSize(value, notify = true) {
+    const size = normalizeSize(value);
+    const scale = size / ORB_SIZE;
+    const offset = (size - ORB_SIZE) / 2;
+    this.state.size = size;
+    if (this.host) {
+      this.host.style.setProperty("--orb-size", `${size}px`);
+      this.host.style.setProperty("--orb-scale", String(scale));
+      this.host.style.setProperty("--orb-offset", `${offset}px`);
+    }
+    if (this.orb) {
+      this.orb.style.setProperty("--orb-size", `${size}px`);
+      this.orb.style.setProperty("--orb-scale", String(scale));
+      this.orb.style.setProperty("--orb-offset", `${offset}px`);
+    }
+    if (this.state.position) this.setPosition(this.state.position, false);
+    if (notify) this._notify("size");
+    return size;
+  }
+
   setPosition(position, notify = true) {
-    const next = clampPosition(position, this._viewport(), ORB_SIZE, this.margin);
+    const next = clampPosition(position, this._viewport(), this.state.size, this.margin);
     this.state.position = next;
     if (this.host) {
       this.host.style.setProperty("--translation-orb-x", `${next.x}px`);
@@ -344,6 +376,7 @@ class TranslationOrbController {
       skin: this.state.skin,
       surface: this.state.surface,
       actualSurface: this._actualSurface,
+      size: this.state.size,
       progress: this.state.progress,
       position: this.state.position ? Object.freeze({ ...this.state.position }) : null
     });
@@ -359,6 +392,8 @@ class TranslationOrbController {
     this._themeObserver?.disconnect();
     this._themeObserver = null;
     this._drag = null;
+    const inkWater = this.orb?.querySelector?.(".translation-orb__ink-water");
+    if (inkWater) destroyInkWaterElement(inkWater);
     this.host?.remove();
     this.host = null;
     this.orb = null;
@@ -487,6 +522,8 @@ module.exports = {
   BUILTIN_SKINS,
   DEFAULT_SKIN_ID,
   ORB_SIZE,
+  MIN_ORB_SIZE,
+  MAX_ORB_SIZE,
   TranslationOrbController,
   TranslationOrbSkinRegistry,
   clampPosition,

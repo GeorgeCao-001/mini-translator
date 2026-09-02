@@ -1403,12 +1403,14 @@ class TranslateProgressModal extends Modal {
       registry: createDefaultSkinRegistry(),
       surface: "auto",
       skin: s.orbSkin || "ink-wash",
+      size: s.orbSize || 40,
       position: s.orbPosition || null,
       progress: st.total ? pct : null,
       onStateChange: (state, reason) => {
         // 只持久化低频的用户态变化；progress 每 120ms 一次，绝不落盘
-        if (reason !== "position" && reason !== "skin") return;
+        if (reason !== "position" && reason !== "skin" && reason !== "size") return;
         s.orbSkin = state.skin;
+        s.orbSize = state.size;
         s.orbPosition = state.position ? { ...state.position } : null;
         void this.plugin.saveData(s);
       },
@@ -2717,14 +2719,19 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
       const orb = orbMod.createOrbElement(document);
       const skin = orbRegistry.resolve(skinId);
       const surface = document.body.classList.contains("theme-dark") ? "dark" : "light";
+      const size = Math.min(96, Math.max(28, Number(this.plugin.settings.orbSize) || 40));
       orb.dataset.skin = skin.id;
       orb.dataset.translationOrbSkin = skin.id;
       orb.dataset.translationOrbSurface = surface;
       orb.dataset.translationOrbState = "determinate";
+      orb.style.setProperty("--orb-size", `${size}px`);
+      orb.style.setProperty("--orb-scale", String(size / 40));
+      orb.style.setProperty("--orb-offset", `${(size - 40) / 2}px`);
       orb.style.setProperty("--progress-offset", "38"); // 预览固定画 62%
       for (const [name, value] of Object.entries(skin.tokens[surface])) {
         orb.style.setProperty(name, value);
       }
+      previewHost.style.height = `${Math.max(64, size + 24)}px`;
       previewHost.appendChild(orb);
     };
     new Setting(containerEl)
@@ -2739,6 +2746,21 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
         });
       });
     renderOrbPreview(this.plugin.settings.orbSkin || "ink-wash");
+
+    new Setting(containerEl)
+      .setName("悬浮球大小")
+      .setDesc("拖动滑块调整悬浮球直径（28–96 px），上方会实时预览")
+      .addSlider((slider) =>
+        slider
+          .setLimits(28, 96, 2)
+          .setValue(Math.min(96, Math.max(28, Number(this.plugin.settings.orbSize) || 40)))
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.orbSize = value;
+            await this.plugin.saveData(this.plugin.settings);
+            renderOrbPreview(this.plugin.settings.orbSkin || "ink-wash");
+          })
+      );
 
     new Setting(containerEl)
       .setName("重置悬浮球位置")
@@ -2766,6 +2788,7 @@ module.exports = class MiniTranslator extends Plugin {
         llmProfiles: [],
         activeProfile: 0,
         orbSkin: "ink-wash", // 悬浮球皮肤（translation-orb 五款内置之一）
+        orbSize: 40, // 悬浮球直径（px），设置页可在 28–96 之间调整
         orbPosition: null, // 悬浮球拖动位置 {x,y}，null 用默认右下角
       },
       await this.loadData()
