@@ -44,6 +44,72 @@
   background: var(--background-modifier-hover);
 }
 
+.mini-panel-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 2px;
+  margin-top: -5px;
+  padding: 4px 5px 4px 8px;
+  border-radius: 9px;
+  background: var(--background-secondary);
+  box-shadow: inset 0 0 0 1px color-mix(
+    in srgb,
+    var(--background-modifier-border) 55%,
+    transparent
+  );
+}
+
+.mini-panel-actions-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.mini-panel-actions-title > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-panel-actions-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.72;
+}
+
+.mini-panel-actions-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.mini-full-translate-btn {
+  width: auto;
+  min-height: 26px;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  cursor: pointer;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.mini-full-translate-btn:hover,
+.mini-full-translate-btn:focus-visible {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
 /* 双语逐句对照：原文行弱化，译文行正常，句间留白 */
 .mini-flow {
   display: flex;
@@ -135,14 +201,59 @@
   user-select: text;
 }
 
-/* 选区旁的小弹窗保持紧凑；内容过长时在固定高度内滚动，而不是撑满屏幕。 */
+/* 选区旁弹窗初始按字数自适应；用户可拖动右下角缩放，到设置的上限后滚动。 */
+.mini-translator-popup {
+  display: flex;
+  flex-direction: column;
+  min-height: 88px;
+  overflow: hidden;
+  resize: both;
+}
+
+.mini-translator-popup .mini-popup-header {
+  flex: 0 0 auto;
+}
+
+.mini-translator-popup .mini-popup-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Chromium 的原生 resize 标记在部分主题里几乎不可见，补一枚低对比度提示。 */
+.mini-translator-popup::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  opacity: 0.3;
+  background: linear-gradient(
+    135deg,
+    transparent 0 45%,
+    var(--text-faint) 46% 53%,
+    transparent 54% 68%,
+    var(--text-faint) 69% 76%,
+    transparent 77%
+  );
+  transition: opacity 0.15s;
+}
+
+.mini-translator-popup:hover::after {
+  opacity: 0.52;
+}
+
 .mini-translator-popup .mini-en-line {
+  font-size: calc(var(--font-smaller) + var(--mini-popup-small-text-boost, 0px));
   line-height: 1.5;
   margin-bottom: 4px;
 }
 
 .mini-translator-popup .mini-zh-line,
 .mini-translator-popup .mini-dict-line {
+  font-size: calc(var(--font-text-size) + var(--mini-popup-text-boost, 0px));
   line-height: 1.6;
   margin-bottom: 8px;
 }

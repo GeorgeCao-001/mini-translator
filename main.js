@@ -1,4 +1,29 @@
-// Mini Translator v3.0.30 — 对标 Translate for Zotero 的零配置翻译插件
+// Mini Translator v3.0.46 — 对标 Translate for Zotero 的零配置翻译插件
+// v3.0.46：宽度预设只约束弹窗自动打开时的宽度；用户从右下角手动缩放后可继续放宽，
+//         仅受当前视口边界限制，记住并恢复的手动宽度也不再被预设截断。
+// v3.0.45：把上一版“紧凑”的 420px 宽度作为新的“标准”，其余宽度预设再整体下移一档；
+//         新紧凑为 320px，自适应基础上限同步降为 420px。
+// v3.0.44：翻译框尺寸加入自定义宽高与“记住上次大小”；各预设最大宽度整体下调一档，
+//         恢复的尺寸仍会按当前预设、视口和原文上下方可用空间安全裁剪。
+// v3.0.43：侧边栏全文翻译入口改为轻量工具条；划词翻译框支持拖动右下角自由缩放，
+//         设置中可选择默认最大尺寸，同时继续遵守屏幕边界与“不遮挡原文”的定位规则。
+// v3.0.42：侧边栏“全文翻译”补齐当前 PDF 与文件选择（支持多选）两个入口。
+// v3.0.41：修复大模型配置页刷新时重复追加整套编辑界面；查询/添加/删除/切换模型后
+//         统一从根容器重绘，并给模型查询加互斥与“查询中”状态，避免重复请求。
+// v3.0.40：翻译框加入大屏响应式倍率；2K/4K 视口会同步放宽尺寸上限并轻微放大文字，
+//         普通窗口保持原尺寸，极大屏幕也设有倍率上限，避免弹窗反过来铺满屏幕。
+// v3.0.39：修复 Markdown/阅读视图中选区坐标偶发漂移；弹窗锚定实际文字选区，
+//         译文回填时锁定初始上/下方位并在该侧滚动，不再随内容变高而“乱飞”。
+// v3.0.38：划词翻译框按原文+译文字数平滑放大（最大 760px / 72vh），侧边栏新增全文翻译按钮；
+//         发送翻译源与弹窗展示共用同一份英文排版结果，彻底消除“看到的原文”和“实际发送原文”不一致。
+// v3.0.37：公式占位符改用各翻译源更稳定的 ASCII token，并保留公式前后空格；
+//         兼容还原旧版 Unicode token，避免火山/腾讯把公式吞掉。
+// v3.0.36：补齐所有句子/段落及全文批次入口的统一源文本重排，并移除 PDF 常见软连字符。
+// v3.0.35：所有翻译源统一先重排 PDF/复制文本的硬换行与断词，再发送翻译请求，避免免费源逐行误译。
+// v3.0.34：划词翻译弹窗的“复制”按钮现在只复制译文，不再包含英文原文。
+// v3.0.33：翻译完成后弹窗外单击即可关闭；仅翻译中阶段需要弹窗外连续双击取消，完成后不再提示“已取消”。
+// v3.0.32：短标题/短语也直接翻译，明确禁止大模型索要正文或额外上下文。
+// v3.0.31：自动划词翻译改为连续双击弹窗外才取消，移除单击误触取消；保留 Esc、关闭按钮和命令取消。
 // v3.0.30：自动划词翻译增加低打扰取消机制：等待期间点击任意位置或按 Esc 即可取消，
 //         翻译悬浮窗增加明确的关闭/取消按钮，并校验选区在等待期间未发生变化；
 // v3.0.29：翻译悬浮窗改为内容自适应宽度，短句更紧凑、长句限制在可读范围内；
@@ -78,17 +103,196 @@ const {
   shell,
 } = require("obsidian");
 
-const WORD_RE = /^[a-zA-Z][a-zA-Z']*$/;
+const WORD_RE = /^[a-zA-Z][a-zA-Z'’]*$/;
 const VIEW_TYPE = "mini-translator-view";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36";
 
 const CACHE = new Map();
 const CACHE_MAX = 200;
-const POPUP_BODY_MAX_HEIGHT = "min(280px, 42vh)";
-const POPUP_MIN_WIDTH = "min(180px, calc(100vw - 16px))";
-const POPUP_MAX_WIDTH = "min(420px, calc(100vw - 16px))";
+const POPUP_MIN_WIDTH_PX = 200;
 const POPUP_MAX_WIDTH_PX = 420;
+const POPUP_BODY_MAX_HEIGHT_PX = 680;
+const POPUP_CHROME_ALLOWANCE_PX = 44;
+const POPUP_CUSTOM_WIDTH_MIN_PX = 320;
+const POPUP_CUSTOM_WIDTH_MAX_PX = 1600;
+const POPUP_REMEMBERED_WIDTH_MAX_PX = 32768;
+const POPUP_CUSTOM_HEIGHT_MIN_PX = 240;
+const POPUP_CUSTOM_HEIGHT_MAX_PX = 1400;
+const POPUP_CUSTOM_WIDTH_DEFAULT_PX = 760;
+const POPUP_CUSTOM_HEIGHT_DEFAULT_PX = 720;
+const POPUP_SIZE_PRESETS = Object.freeze({
+  adaptive: { label: "随显示区域自适应（推荐）", responsive: true },
+  compact: { label: "紧凑（320 × 480）", maxWidth: 320, maxHeight: 480, scale: 1 },
+  standard: { label: "标准（420 × 720）", maxWidth: 420, maxHeight: 720, scale: 1 },
+  large: { label: "宽大（560 × 900）", maxWidth: 560, maxHeight: 900, scale: 1.12 },
+  xlarge: { label: "超大（760 × 1120）", maxWidth: 760, maxHeight: 1120, scale: 1.24 },
+  custom: { label: "自定义", custom: true, scale: 1 },
+});
+
+function popupDimension(value, fallback, min, max) {
+  const n = Number(value);
+  return Math.round(
+    clampToRange(Number.isFinite(n) ? n : fallback, min, max)
+  );
+}
+
+function normalizeRememberedPopupSize(value) {
+  const width = Number(value?.width);
+  const height = Number(value?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return {
+    width: popupDimension(
+      width,
+      POPUP_CUSTOM_WIDTH_DEFAULT_PX,
+      POPUP_MIN_WIDTH_PX,
+      POPUP_REMEMBERED_WIDTH_MAX_PX
+    ),
+    height: popupDimension(
+      height,
+      POPUP_CUSTOM_HEIGHT_DEFAULT_PX,
+      88,
+      POPUP_CUSTOM_HEIGHT_MAX_PX
+    ),
+  };
+}
+
+// 翻译框不再用一个固定的小上限：短标题保持紧凑，段落越长可用宽度/高度越大。
+// 1600×900 以上按视口较短的一边渐进放大，最高 1.7 倍；这样 2K/4K 屏不会显得像小标签，
+// 但超宽屏也不会只因横向像素很多就把弹窗拉得过大。
+function popupMetricsForChars(
+  charCount,
+  viewportWidth,
+  viewportHeight,
+  sizeMode = "adaptive",
+  customSize = null
+) {
+  const n = Math.max(0, Number(charCount) || 0);
+  const vw = Math.max(1, Number(viewportWidth) || 1);
+  const vh = Math.max(1, Number(viewportHeight) || 1);
+  const resolvedMode = POPUP_SIZE_PRESETS[sizeMode] ? sizeMode : "adaptive";
+  const preset = POPUP_SIZE_PRESETS[resolvedMode];
+  const viewportRatio = Math.min(vw / 1600, vh / 900);
+  const displayScale = preset.responsive
+    ? clampToRange(1 + (viewportRatio - 1) * 0.5, 1, 1.7)
+    : preset.scale;
+  const usableWidth = Math.max(1, vw - 16);
+  const usableHeight = Math.max(1, vh - 16);
+  const requestedMaxWidth = preset.custom
+    ? popupDimension(
+        customSize?.maxWidth,
+        POPUP_CUSTOM_WIDTH_DEFAULT_PX,
+        POPUP_CUSTOM_WIDTH_MIN_PX,
+        POPUP_CUSTOM_WIDTH_MAX_PX
+      )
+    : preset.responsive
+      ? Math.round(POPUP_MAX_WIDTH_PX * displayScale)
+      : preset.maxWidth;
+  const requestedMaxHeight = preset.custom
+    ? popupDimension(
+        customSize?.maxHeight,
+        POPUP_CUSTOM_HEIGHT_DEFAULT_PX,
+        POPUP_CUSTOM_HEIGHT_MIN_PX,
+        POPUP_CUSTOM_HEIGHT_MAX_PX
+      )
+    : preset.responsive
+      ? Math.round(
+          (POPUP_BODY_MAX_HEIGHT_PX + POPUP_CHROME_ALLOWANCE_PX) * displayScale
+        )
+      : preset.maxHeight;
+  const manualMaxWidth = Math.min(requestedMaxWidth, usableWidth);
+  // Presets define the automatic opening width. Once the user grabs the resize
+  // corner, horizontal resizing may use the whole viewport instead.
+  const resizeMaxWidth = usableWidth;
+  const manualMaxHeight = Math.min(requestedMaxHeight, usableHeight);
+  const manualBodyMaxHeight = Math.max(
+    24,
+    manualMaxHeight - POPUP_CHROME_ALLOWANCE_PX
+  );
+  const responsiveMinWidth = Math.round(POPUP_MIN_WIDTH_PX * displayScale);
+  const minWidth = Math.min(responsiveMinWidth, manualMaxWidth, usableWidth);
+  const wantedWidth = Math.round((210 + Math.sqrt(n) * 20) * displayScale);
+  const maxWidth = Math.max(
+    minWidth,
+    Math.min(manualMaxWidth, usableWidth, wantedWidth)
+  );
+  const wantedBodyHeight = Math.round(
+    (260 + Math.sqrt(n) * 14) * displayScale
+  );
+  const viewportBodyCap = Math.max(24, Math.floor(vh * 0.72));
+  const bodyMaxHeight = Math.max(
+    24,
+    Math.min(manualBodyMaxHeight, viewportBodyCap, wantedBodyHeight)
+  );
+  const textBoost = Math.round((displayScale - 1) * 4 * 100) / 100;
+  const smallTextBoost = Math.round((displayScale - 1) * 3 * 100) / 100;
+  return {
+    minWidth,
+    maxWidth,
+    bodyMaxHeight,
+    displayScale,
+    textBoost,
+    smallTextBoost,
+    manualMaxWidth,
+    resizeMaxWidth,
+    manualMaxHeight,
+    manualBodyMaxHeight,
+    sizeMode: resolvedMode,
+  };
+}
+
+function clampToRange(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+// Selection APIs do occasionally report page/local coordinates (or coordinates for
+// an off-screen end of a long selection). Intersect the anchor with the current
+// viewport before positioning a fixed popup so a bad endpoint cannot send it away.
+function normalizeViewportAnchor(x, y, anchor, viewportWidth, viewportHeight) {
+  const vw = Math.max(1, Number(viewportWidth) || 1);
+  const vh = Math.max(1, Number(viewportHeight) || 1);
+  const insetX = Math.min(8, vw / 2);
+  const insetY = Math.min(8, vh / 2);
+  const minX = insetX;
+  const maxX = Math.max(minX, vw - insetX);
+  const minY = insetY;
+  const maxY = Math.max(minY, vh - insetY);
+  const finite = (value, fallback) => {
+    if (value == null || value === "") return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  // x/y historically mean popup origin, with y = selection bottom + 6px.
+  const fallbackLeft = finite(x, vw / 2);
+  const fallbackBottom = finite(y, vh / 2) - 6;
+  const rawLeft = finite(anchor?.left, fallbackLeft);
+  const rawTop = finite(anchor?.top, fallbackBottom - 22);
+  const rawRight = finite(anchor?.right, rawLeft);
+  const rawBottom = finite(anchor?.bottom, Math.max(rawTop, fallbackBottom));
+  const orderedLeft = Math.min(rawLeft, rawRight);
+  const orderedRight = Math.max(rawLeft, rawRight);
+  const orderedTop = Math.min(rawTop, rawBottom);
+  const orderedBottom = Math.max(rawTop, rawBottom);
+  return {
+    left: clampToRange(orderedLeft, minX, maxX),
+    top: clampToRange(orderedTop, minY, maxY),
+    right: clampToRange(orderedRight, minX, maxX),
+    bottom: clampToRange(orderedBottom, minY, maxY),
+  };
+}
+
+function choosePopupPlacement(anchor, popupHeight, viewportHeight) {
+  const margin = 8;
+  const gap = 8;
+  const vh = Math.max(1, Number(viewportHeight) || 1);
+  const height = Math.max(0, Number(popupHeight) || 0);
+  const belowRoom = Math.max(0, vh - margin - (anchor.bottom + gap));
+  const aboveRoom = Math.max(0, anchor.top - gap - margin);
+  if (height <= belowRoom) return "below";
+  if (height <= aboveRoom) return "above";
+  return aboveRoom > belowRoom ? "above" : "below";
+}
 
 // ---------- 源状态中枢（统一广播）：任何界面对 翻译源/词典/模型/选中状态 的改动，
 // 落盘后自动通知所有注册的界面立即重建。界面自己不关心别人，只管订阅。 ----------
@@ -132,19 +336,28 @@ function protectMath(text) {
   const map = [];
   const t = text.replace(MATH_RE, (m) => {
     map.push(m);
-    return `⟦MT${map.length - 1}⟧`;
+    // 免费源对 Unicode 角括号不稳定（会转成引号或直接丢掉），
+    // ASCII 下划线 token 在有道/火山/腾讯/谷歌中能稳定原样回传。
+    return `__MT${map.length - 1}__`;
   });
   return { text: t, map };
 }
 
 function restoreMath(text, map) {
-  return text.replace(/⟦MT(\d+)⟧/g, (m, i) => map[Number(i)] || m);
+  // 新版 ASCII token + 旧版 Unicode token/常见方括号变体均可还原。
+  return text.replace(
+    /(?:__\s*MT\s*(\d+)\s*__|\[\[\s*MT\s*(\d+)\s*\]\]|⟦\s*MT\s*(\d+)\s*⟧)/gi,
+    (m, a, b, c) => {
+      const i = Number(a ?? b ?? c);
+      return map[i] || m;
+    }
+  );
 }
 
 // ---------- 逐句切分：句末标点 + 空格 + 大写开头才算一句（避开 0.5、et al. 等），且不切断公式 ----------
 function splitSentences(text) {
   const { text: t, map } = protectMath(text);
-  const parts = t.split(/(?<=[.!?])\s+(?=[A-Z"(])/);
+  const parts = t.split(/(?<=[.!?])\s+(?=[A-Z"(“‘])/);
   const out = parts.map((p) => restoreMath(p.trim(), map)).filter(Boolean);
   return out.length > 1 ? out : [text];
 }
@@ -320,17 +533,30 @@ function pdfLinesToParagraphs(lines) {
 function mapMath(text, fn) {
   return text
     .split(MATH_RE)
-    .map((p, i) => (i % 2 === 1 ? cleanInvisibles(p) : fn(p)))
-    .join("");
+    .map((p, i) => {
+      if (i % 2 === 1) return cleanInvisibles(p);
+      // fn（reflow/typofix）本身会 trim；公式两侧的空格不能因此丢失，
+      // 否则 "defined as $L$" 会被压成 "defined as$L$"。
+      const lead = (p.match(/^\s*/) || [""])[0];
+      const trail = (p.match(/\s*$/) || [""])[0];
+      const end = p.length - trail.length;
+      if (end < lead.length) return p;
+      return lead + fn(p.slice(lead.length, end)) + trail;
+    })
+    .join("")
+    .trim();
 }
 
-// ---------- 英文排版规范化：段落重排、弯引号、连字符续接、破折号 ----------
-function typofixEn(s) {
-  return mapMath(s, baseTypofixEn);
+// ---------- 英文源文本重排：先合并 PDF/复制文本的硬换行与断行单词 ----------
+// 翻译请求统一走 reflowEn；它只修复文本结构，不改变语义或添加排版字符。
+function reflowEn(s) {
+  return mapMath(s, baseReflowEn);
 }
 
-function baseTypofixEn(s) {
+function baseReflowEn(s) {
   let t = cleanInvisibles(s);
+  // PDF 文本层可能保留软连字符（U+00AD），先去除，避免它被翻译源当成真实字符。
+  t = t.replace(/\u00ad/g, "");
   t = t.replace(/\r\n?/g, "\n");
   t = t.replace(/[ \t]+/g, " ");
   // PDF 复制的硬换行：空行保留为段落分隔，其余换行并入段落自然折行
@@ -340,6 +566,16 @@ function baseTypofixEn(s) {
   t = t.replace(/ +/g, " ");
   // 断行连字符续接：optimiza- tion → optimization
   t = t.replace(/([a-z])- ([a-z])/gi, "$1$2");
+  return t.trim();
+}
+
+// ---------- 英文展示规范化：源文本重排 + 弯引号、破折号 ----------
+function typofixEn(s) {
+  return mapMath(s, baseTypofixEn);
+}
+
+function baseTypofixEn(s) {
+  let t = baseReflowEn(s);
   // 弯引号、双连字符转破折号
   t = t
     .replace(/(^|[\s(\[{])"/g, "$1\u201c")
@@ -348,6 +584,13 @@ function baseTypofixEn(s) {
     .replace(/'/g, "\u2019")
     .replace(/\s--\s/g, " \u2014 ");
   return t.trim();
+}
+
+// 所有句子/段落/词典入口发送前的统一规范化。
+// 这里刻意复用 typofixEn：弹窗中看到的原文，就是实际送进翻译源的原文；
+// 只在下一步 protectMath 时临时把完整 LaTeX 替换为可还原 token。
+function normalizeTranslationInput(s) {
+  return typofixEn(demathify(cleanInvisibles(String(s ?? ""))));
 }
 
 // ---------- 中文译文排版规范化：折叠空白、清 \r、全角空格、压缩空行 ----------
@@ -751,8 +994,9 @@ let PLUGIN_SETTINGS = null;
 
 const TRANSLATE_PROMPT =
   "你是学术论文翻译助手。把用户给出的英文翻译成中文：忠实原文、术语准确、符合中文学术表达习惯。\n" +
+  "输入可能只是单词、标题、短语、标签、不完整片段、句子或段落。无论输入多短，都必须直接翻译输入本身；标题或短语只输出对应中文，不加括号说明；不得要求用户补充正文、上下文或更多内容，不得回复“请提供需要翻译的英文段落”等拒答/索要提示。\n" +
   "数学公式规则（重要）：\n" +
-  "1. 原文中以 ⟦MT数字⟧ 形式出现的占位符代表数学公式，必须原样保留在译文对应位置，不要翻译、修改或删除。\n" +
+  "1. 原文中以 __MT数字__ 形式出现的占位符代表数学公式（旧版可能是 ⟦MT数字⟧ 或 [[MT数字]]），必须原样保留在译文对应位置，不要翻译、修改或删除。\n" +
   "2. PDF 提取的文本中公式经常残缺（如 x2 实为 x^2、上下标丢失、希腊字母乱码）。遇到明显是数学内容的片段，先根据上下文恢复成正确的 LaTeX，再包裹在 $...$（行内）或 $$...$$（独立公式）中放入译文；变量名和函数名不要翻译。\n" +
   "3. 除以上情形外的普通文字正常翻译，不要随意添加公式界定符。\n" +
   "只输出译文，不要任何解释或原文。";
@@ -1049,8 +1293,13 @@ function groupIntoBatches(blocks) {
 const FULL_CONCURRENCY = 3;
 
 async function translateBlocksAll(plugin, blocks, source, onProg) {
-  const batches = groupIntoBatches(blocks);
-  const results = new Array(blocks.length).fill(null);
+  // 统一在进入任何翻译源前重排硬换行/断词；保留原块的页码与坐标不变。
+  const workBlocks = blocks.map((b) => ({
+    ...b,
+    text: normalizeTranslationInput(b.text),
+  }));
+  const batches = groupIntoBatches(workBlocks);
+  const results = new Array(workBlocks.length).fill(null);
   // 取消竞速：requestFtCancel 后 cancelP 立即 resolve，在途请求的 await 马上返回
   const cancelP = plugin.ftCancelPromise || new Promise(() => {});
   const CANCEL = "__FT_CANCELLED__";
@@ -1068,7 +1317,7 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
             ? `已完成批次 ${finishedBatches}/${batches.length}`
             : "",
         done,
-        total: blocks.length,
+        total: workBlocks.length,
         batches: batches.length,
         tokDone: estTokens(doneChars), // 真实值；模态框内平滑插值成流式
       });
@@ -1079,14 +1328,14 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
     const need = [];
     const idx = [];
     for (const gi of bat) {
-      const key = `full:${sourceKey(source)}:${blocks[gi].text}`;
+      const key = `full:${sourceKey(source)}:${workBlocks[gi].text}`;
       const hit = CACHE.get(key);
       if (hit) {
         results[gi] = hit;
         done++;
-        doneChars += blocks[gi].text.length;
+        doneChars += workBlocks[gi].text.length;
       } else {
-        need.push(blocks[gi].text);
+        need.push(workBlocks[gi].text);
         idx.push(gi);
       }
     }
@@ -1125,8 +1374,8 @@ async function translateBlocksAll(plugin, blocks, source, onProg) {
       const rec = { en: got[k]?.en || "", zh: got[k]?.zh || "" };
       results[gi] = rec;
       done++;
-      doneChars += blocks[gi].text.length;
-      CACHE.set(`full:${sourceKey(source)}:${blocks[gi].text}`, rec);
+      doneChars += workBlocks[gi].text.length;
+      CACHE.set(`full:${sourceKey(source)}:${workBlocks[gi].text}`, rec);
     });
     finishedBatches++;
     tick();
@@ -2003,6 +2252,7 @@ class LLMConfigModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.editing = -1;
+    this._modelQuerying = false;
   }
   onOpen() {
     this.contentEl.empty();
@@ -2090,6 +2340,7 @@ class LLMConfigModal extends Modal {
       this.render();
       return;
     }
+    if (!Array.isArray(p.models)) p.models = [];
     const back = c.createEl("button", { text: "← 返回" });
     back.onclick = () => {
       this.editing = -1;
@@ -2147,15 +2398,24 @@ class LLMConfigModal extends Modal {
       })
       .addButton((b) =>
         b.setButtonText("查询模型").setCta().onClick(async () => {
+          if (this._modelQuerying) return;
+          this._modelQuerying = true;
+          b.setButtonText("查询中…");
+          if (b.buttonEl) b.buttonEl.disabled = true;
           try {
             const list2 = await fetchModels(p.url, p.apiKey);
+            if (!Array.isArray(p.models)) p.models = [];
             for (const m of list2) if (!p.models.includes(m)) p.models.push(m);
             if (!p.activeModel) p.activeModel = p.models[0];
             await this.plugin.saveData(this.plugin.settings);
             new Notice(`已获取 ${list2.length} 个模型`, 2000);
-            this.renderEdit(idx);
           } catch (e) {
             new Notice(`查询失败：${e.message}`, 6000);
+          } finally {
+            this._modelQuerying = false;
+            // render() 会先 empty 根容器，再重建当前编辑页。不能直接调用
+            // renderEdit()，否则每查询一次都会把一整套表单追加到旧表单后面。
+            this.render();
           }
         })
       );
@@ -2173,7 +2433,7 @@ class LLMConfigModal extends Modal {
               p.activeModel = v;
               this.plugin.saveData(this.plugin.settings);
             }
-            this.renderEdit(idx);
+            this.render();
           }
         });
         modelInput = t;
@@ -2186,7 +2446,7 @@ class LLMConfigModal extends Modal {
             p.activeModel = v;
             this.plugin.saveData(this.plugin.settings);
           }
-          this.renderEdit(idx);
+          this.render();
         })
       )
       .addButton((b) =>
@@ -2196,7 +2456,7 @@ class LLMConfigModal extends Modal {
           p.models = (p.models || []).filter((m) => m !== cur);
           p.activeModel = p.models[0] || "";
           await this.plugin.saveData(this.plugin.settings);
-          this.renderEdit(idx);
+          this.render();
         })
       );
 
@@ -2215,7 +2475,7 @@ class LLMConfigModal extends Modal {
         chip.onclick = async () => {
           p.activeModel = m;
           await this.plugin.saveData(this.plugin.settings);
-          this.renderEdit(idx);
+          this.render();
         };
       }
     }
@@ -2339,6 +2599,8 @@ function engineOptions() {
 }
 
 async function translateSentence(text, primary) {
+  // 所有句子/段落翻译源共用同一份重排后的输入，避免 PDF 硬换行或断词被源服务误当成独立单词。
+  text = normalizeTranslationInput(text);
   // 数学公式先替换成占位符，任何引擎都不会翻坏，返回后再还原
   const { text: safeText, map } = protectMath(text);
   // 若选中的是某个大模型配置，直接用该配置翻译（不回退到免费源，避免隐性切换）
@@ -2428,6 +2690,30 @@ class MiniTranslatorView extends ItemView {
       await navigator.clipboard.writeText(this.lastResult);
       new Notice("已复制", 1500);
     };
+
+    // 全文翻译不再只藏在命令面板；入口收进一条轻量工具条，避免大按钮打断面板主内容。
+    this.panelActions = this.contentEl.createDiv({ cls: "mini-panel-actions" });
+    const fullTranslateLabel = this.panelActions.createDiv({
+      cls: "mini-panel-actions-title",
+    });
+    const fullTranslateIcon = fullTranslateLabel.createSpan({
+      cls: "mini-panel-actions-icon",
+    });
+    setIcon(fullTranslateIcon, "files");
+    fullTranslateLabel.createSpan({ text: "PDF 全文翻译" });
+    this.fullTranslateBtn = this.panelActions.createEl("button", {
+      text: "当前",
+      cls: "mini-full-translate-btn",
+      attr: { title: "使用当前大模型翻译源全文翻译已打开的 PDF" },
+    });
+    this.fullTranslateBtn.onclick = () => this.plugin.fullTranslateFlow();
+    this.fullTranslatePickBtn = this.panelActions.createEl("button", {
+      text: "选择…",
+      cls: "mini-full-translate-btn",
+      attr: { title: "从 Vault 目录树选择一个或多个 PDF 进行全文翻译" },
+    });
+    this.fullTranslatePickBtn.onclick = () =>
+      new FilePickTranslateModal(this.app, this.plugin).open();
 
     this.flowEl = this.contentEl.createDiv({ cls: "mini-flow" });
     this.metaEl = this.contentEl.createDiv({ cls: "mini-meta" });
@@ -2742,6 +3028,126 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
           })
       );
 
+    containerEl.createEl("h3", { text: "划词翻译框" });
+    const refreshOpenPopupLimits = () => {
+      if (!this.plugin.popupEl) return;
+      this.plugin._applyPopupSize(this.plugin.popupEl);
+      this.plugin._placePopup(
+        this.plugin.popupEl,
+        this.plugin.lastPopupAnchor,
+        { lock: true }
+      );
+    };
+    let setCustomSizeVisibility = () => {};
+    new Setting(containerEl)
+      .setName("自动尺寸上限")
+      .setDesc(
+        "挡位控制自动打开尺寸；手动缩放时宽度可超过挡位直到屏幕边界，高度仍受挡位和原文所在一侧的空间限制"
+      )
+      .addDropdown((dd) => {
+        for (const [id, preset] of Object.entries(POPUP_SIZE_PRESETS)) {
+          dd.addOption(id, preset.label);
+        }
+        dd.setValue(
+          POPUP_SIZE_PRESETS[this.plugin.settings.popupMaxSize]
+            ? this.plugin.settings.popupMaxSize
+            : "adaptive"
+        ).onChange(async (v) => {
+          this.plugin.settings.popupMaxSize = POPUP_SIZE_PRESETS[v]
+            ? v
+            : "adaptive";
+          await this.plugin.saveData(this.plugin.settings);
+          setCustomSizeVisibility();
+          refreshOpenPopupLimits();
+        });
+      });
+
+    const customWidthSetting = new Setting(containerEl)
+      .setName("自定义自动最大宽度")
+      .setDesc(
+        `仅在选择“自定义”时生效（${POPUP_CUSTOM_WIDTH_MIN_PX}–${POPUP_CUSTOM_WIDTH_MAX_PX} px）`
+      )
+      .addSlider((slider) =>
+        slider
+          .setLimits(
+            POPUP_CUSTOM_WIDTH_MIN_PX,
+            POPUP_CUSTOM_WIDTH_MAX_PX,
+            20
+          )
+          .setValue(this.plugin.settings.popupCustomMaxWidth)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.popupCustomMaxWidth = popupDimension(
+              value,
+              POPUP_CUSTOM_WIDTH_DEFAULT_PX,
+              POPUP_CUSTOM_WIDTH_MIN_PX,
+              POPUP_CUSTOM_WIDTH_MAX_PX
+            );
+            await this.plugin.saveData(this.plugin.settings);
+            refreshOpenPopupLimits();
+          })
+      );
+    const customHeightSetting = new Setting(containerEl)
+      .setName("自定义最大高度")
+      .setDesc(
+        `仅在选择“自定义”时生效（${POPUP_CUSTOM_HEIGHT_MIN_PX}–${POPUP_CUSTOM_HEIGHT_MAX_PX} px）`
+      )
+      .addSlider((slider) =>
+        slider
+          .setLimits(
+            POPUP_CUSTOM_HEIGHT_MIN_PX,
+            POPUP_CUSTOM_HEIGHT_MAX_PX,
+            20
+          )
+          .setValue(this.plugin.settings.popupCustomMaxHeight)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.popupCustomMaxHeight = popupDimension(
+              value,
+              POPUP_CUSTOM_HEIGHT_DEFAULT_PX,
+              POPUP_CUSTOM_HEIGHT_MIN_PX,
+              POPUP_CUSTOM_HEIGHT_MAX_PX
+            );
+            await this.plugin.saveData(this.plugin.settings);
+            refreshOpenPopupLimits();
+          })
+      );
+    setCustomSizeVisibility = () => {
+      const visible = this.plugin.settings.popupMaxSize === "custom";
+      customWidthSetting.settingEl.style.display = visible ? "" : "none";
+      customHeightSetting.settingEl.style.display = visible ? "" : "none";
+    };
+    setCustomSizeVisibility();
+
+    const rememberedPopupSize = normalizeRememberedPopupSize(
+      this.plugin.settings.popupLastSize
+    );
+    new Setting(containerEl)
+      .setName("记住上次悬浮窗大小")
+      .setDesc(
+        rememberedPopupSize
+          ? `已记录 ${rememberedPopupSize.width} × ${rememberedPopupSize.height} px；新弹窗会沿用，宽度只按屏幕裁剪，高度按挡位和原文一侧空间裁剪`
+          : "开启后，手动缩放结束时记录宽高；下一次翻译沿用该大小"
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(!!this.plugin.settings.rememberPopupSize)
+          .onChange(async (value) => {
+            this.plugin.settings.rememberPopupSize = value;
+            await this.plugin.saveData(this.plugin.settings);
+          })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("清除记录")
+          .setDisabled(!rememberedPopupSize)
+          .onClick(async () => {
+            this.plugin.settings.popupLastSize = null;
+            await this.plugin.saveData(this.plugin.settings);
+            this.display();
+          })
+      );
+
     containerEl.createEl("h3", { text: "全文翻译" });
     // 输出形式固定为纯译文（双语对照排版效果差，选项已移除）
 
@@ -2833,6 +3239,11 @@ module.exports = class MiniTranslator extends Plugin {
         dictSource: "百度",
         autoTranslate: false,
         autoTranslateDelay: 2,
+        popupMaxSize: "adaptive", // 自动打开尺寸及手动高度上限；手动宽度只受视口限制
+        popupCustomMaxWidth: POPUP_CUSTOM_WIDTH_DEFAULT_PX,
+        popupCustomMaxHeight: POPUP_CUSTOM_HEIGHT_DEFAULT_PX,
+        rememberPopupSize: false,
+        popupLastSize: null,
         fullHtml: false, // 原版式 HTML 复刻：默认关（纯 Markdown 更快）
         history: [],
         llmProfiles: [],
@@ -2842,6 +3253,25 @@ module.exports = class MiniTranslator extends Plugin {
         orbPosition: null, // 悬浮球拖动位置 {x,y}，null 用默认右下角
       },
       await this.loadData()
+    );
+    if (!POPUP_SIZE_PRESETS[this.settings.popupMaxSize]) {
+      this.settings.popupMaxSize = "adaptive";
+    }
+    this.settings.popupCustomMaxWidth = popupDimension(
+      this.settings.popupCustomMaxWidth,
+      POPUP_CUSTOM_WIDTH_DEFAULT_PX,
+      POPUP_CUSTOM_WIDTH_MIN_PX,
+      POPUP_CUSTOM_WIDTH_MAX_PX
+    );
+    this.settings.popupCustomMaxHeight = popupDimension(
+      this.settings.popupCustomMaxHeight,
+      POPUP_CUSTOM_HEIGHT_DEFAULT_PX,
+      POPUP_CUSTOM_HEIGHT_MIN_PX,
+      POPUP_CUSTOM_HEIGHT_MAX_PX
+    );
+    this.settings.rememberPopupSize = !!this.settings.rememberPopupSize;
+    this.settings.popupLastSize = normalizeRememberedPopupSize(
+      this.settings.popupLastSize
     );
     // 迁移旧版设置（v1.2 及更早的 llmUrl/llmApiKey/llmModel/customPresets）到大模型配置数组
     if (!Array.isArray(this.settings.llmProfiles) || this.settings.llmProfiles.length === 0) {
@@ -2891,7 +3321,7 @@ module.exports = class MiniTranslator extends Plugin {
     }
     await this.saveData(this.settings);
     PLUGIN_SETTINGS = this.settings;
-    console.log("[mini-translator] v1.3.0 已加载");
+    console.log("[mini-translator] v3.0.46 已加载");
 
     this.registerView(VIEW_TYPE, (leaf) => {
       // 自己持有面板实例引用；leaf.view 在新版 Obsidian 里不保证返回插件实例
@@ -3044,12 +3474,31 @@ module.exports = class MiniTranslator extends Plugin {
     this.registerDomEvent(document, "selectionchange", () =>
       this.onSelectionChanged()
     );
-    // 选择尚未触发翻译时，任何新的指针操作都视为用户改变了意图：静默取消等待。
-    // 这样误划后点回正文/工具栏即可撤销，不需要等计时器跑完，也不会弹出多余提示。
-    this.registerDomEvent(document, "pointerdown", () =>
-      this.cancelAutoTranslate()
-    );
-    // Esc 是等待阶段最明确的取消键；弹窗打开后仍由弹窗自己的 Esc 监听负责关闭。
+    // Keep the end of the user's latest drag as a last-resort text anchor. This is
+    // only used when an editor/DOM selection API cannot expose a rectangle.
+    this.registerDomEvent(document, "pointerup", (e) => {
+      if (this.popupEl && this.popupEl.contains(e.target)) return;
+      if (!Number.isFinite(e.clientX) || !Number.isFinite(e.clientY)) return;
+      this._lastSelectionPointer = {
+        x: e.clientX,
+        y: e.clientY,
+        target: e.target,
+        at: Date.now(),
+      };
+    });
+    // 翻译进行中：单击不打断，只有弹窗外连续双击才取消，降低误操作概率。
+    // 翻译完成后：弹窗外单击即可关闭；此时双击也只关闭，不显示取消提示。
+    this.registerDomEvent(document, "dblclick", (e) => {
+      if (this.popupEl && this.popupEl.contains(e.target)) return;
+      const popupTranslating = !!this.popupEl && !this._popupTranslationDone;
+      const hadPending = this.cancelAutoTranslate();
+      const hadPopup = !!this.popupEl;
+      if (hadPopup) this.closePopup();
+      if (popupTranslating || (!hadPopup && hadPending)) {
+        new Notice("已取消当前划词翻译", 1500);
+      }
+    });
+    // Esc 仍是明确的取消键；弹窗打开后由弹窗自己的 Esc 监听负责关闭。
     this.registerDomEvent(document, "keydown", (e) => {
       if (e.key === "Escape") this.cancelAutoTranslate();
     });
@@ -3081,8 +3530,8 @@ module.exports = class MiniTranslator extends Plugin {
     broadcastSources("refresh");
   }
 
-  // 只取消“停留等待”阶段，不主动清掉用户当前选区；若弹窗已经出现，
-  // Esc / 点击外部 / 右上角 × 会通过 closePopup 递增 _popupRunId，令在途结果失效。
+  // 只取消“停留等待”阶段，不主动清掉用户当前选区；翻译中的弹窗由
+  // Esc / 屏幕外双击 / 右上角 × 通过 closePopup 递增 _popupRunId，令在途结果失效。
   cancelAutoTranslate() {
     const hadPending = this.dwellTimer != null;
     if (hadPending) clearTimeout(this.dwellTimer);
@@ -3092,18 +3541,22 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   onSelectionChanged() {
-    this.cancelAutoTranslate();
-    if (!this.settings.autoTranslate) return;
     const sel = window.getSelection();
     const t = ((sel && sel.toString()) || "").trim();
+    if (!this.settings.autoTranslate) return;
+    // 清空选区时不立即取消：单击只是改变了浏览器选区，真正触发取消需要屏幕外双击。
+    // 定时器到期后会再次校验选区，若已为空则自然退出，不会误发起翻译。
     if (!t || !/[a-zA-Z]/.test(t)) return;
     // 弹窗内部的选中不触发
     if (this.popupEl && sel.anchorNode && this.popupEl.contains(sel.anchorNode)) {
       return;
     }
+    // 用户确实换了一段有效英文选区：取消旧等待并为新选区重新计时。
+    this.cancelAutoTranslate();
     const delay = (this.settings.autoTranslateDelay ?? 2) * 1000;
     // 用对象 token 防止一个已经排队但未被及时清理的旧回调误触发。
-    const pendingToken = { text: t };
+    const selectionInfo = this._readDomSelectionInfo(sel);
+    const pendingToken = { text: t, anchor: selectionInfo?.anchor || null };
     this._autoTranslatePending = pendingToken;
     this.dwellTimer = setTimeout(() => {
       if (this._autoTranslatePending !== pendingToken) return;
@@ -3113,7 +3566,11 @@ module.exports = class MiniTranslator extends Plugin {
       const curText = ((cur && cur.toString()) || "").trim();
       // 必须仍是同一段选区；误划后重新拖动/点击不会把旧选区送进翻译。
       if (!curText || curText !== pendingToken.text || !/[a-zA-Z]/.test(curText)) return;
-      this.translateSelection("paragraph");
+      const currentInfo = this._readDomSelectionInfo(cur);
+      this.translateSelection("paragraph", {
+        text: curText,
+        anchor: currentInfo?.anchor || pendingToken.anchor,
+      });
     }, delay);
   }
 
@@ -3174,34 +3631,143 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   // ---------- 选区旁弹窗 ----------
-  _normalizePopupAnchor(x, y, anchor) {
-    const vw = Math.max(1, Number(window.innerWidth) || 1);
-    const vh = Math.max(1, Number(window.innerHeight) || 1);
-    const finite = (value, fallback) => {
-      const n = Number(value);
-      return Number.isFinite(n) ? n : fallback;
+  _readDomSelectionInfo(selection = window.getSelection(), root = null) {
+    try {
+      const text = String(selection?.toString?.() || "").trim();
+      if (!text || !selection || selection.rangeCount < 1) return null;
+      if (
+        this.popupEl &&
+        selection.anchorNode &&
+        this.popupEl.contains(selection.anchorNode)
+      ) {
+        return null;
+      }
+      const range = selection.getRangeAt(0);
+      if (root) {
+        const common = range.commonAncestorContainer;
+        const anchorInside = !selection.anchorNode || root.contains(selection.anchorNode);
+        const commonInside = !common || root.contains(common);
+        if (!anchorInside && !commonInside) return null;
+      }
+
+      const vw = Math.max(1, Number(window.innerWidth) || 1);
+      const vh = Math.max(1, Number(window.innerHeight) || 1);
+      const validRect = (r) =>
+        r &&
+        [r.left, r.top, r.right, r.bottom].every((v) => Number.isFinite(Number(v))) &&
+        Number(r.bottom) > Number(r.top);
+      const visibleRect = (r) =>
+        validRect(r) && r.right >= 0 && r.left <= vw && r.bottom >= 0 && r.top <= vh;
+      let rects = Array.from(range.getClientRects?.() || []).filter(visibleRect);
+      if (!rects.length) {
+        const bounding = range.getBoundingClientRect?.();
+        if (visibleRect(bounding)) rects = [bounding];
+      }
+      if (!rects.length) return { text, anchor: null };
+
+      const anchor = {
+        left: Math.min(...rects.map((r) => Number(r.left))),
+        top: Math.min(...rects.map((r) => Number(r.top))),
+        right: Math.max(...rects.map((r) => Number(r.right))),
+        bottom: Math.max(...rects.map((r) => Number(r.bottom))),
+      };
+      // Keep popup positioning in viewport coordinates. _normalizePopupAnchor
+      // clips partially visible selections and guards against pathological values.
+      return { text, anchor, x: anchor.left, y: anchor.bottom + 6 };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  _editorSelectionAnchor(editor) {
+    if (!editor?.coordsAtPos) return null;
+    let from;
+    let to;
+    try {
+      from = editor.getCursor("from");
+      to = editor.getCursor("to");
+    } catch (e) {
+      return null;
+    }
+    const containerRect = editor.containerEl?.getBoundingClientRect?.() || null;
+    const readCoords = (pos, mode, local = false) => {
+      try {
+        const c = mode == null ? editor.coordsAtPos(pos) : editor.coordsAtPos(pos, mode);
+        if (!c) return null;
+        let left = Number(c.left);
+        let right = Number(c.right);
+        let top = Number(c.top);
+        let bottom = Number(c.bottom);
+        if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+        if (!Number.isFinite(right)) right = left;
+        if (!Number.isFinite(bottom) || bottom <= top) bottom = top + 20;
+
+        if (containerRect) {
+          const pad = 96;
+          const looksWindowRelative =
+            left >= containerRect.left - pad &&
+            left <= containerRect.right + pad &&
+            top >= containerRect.top - pad &&
+            top <= containerRect.bottom + pad;
+          const looksContainerLocal =
+            left >= -pad &&
+            left <= containerRect.width + pad &&
+            top >= -pad &&
+            top <= containerRect.height + pad;
+          // Some editor adapters ignore the requested mode and still return local
+          // coordinates. Convert only when the numbers clearly fit the container but
+          // not its viewport rectangle; this avoids the common double-offset jump.
+          if (local || (!looksWindowRelative && looksContainerLocal)) {
+            left += containerRect.left;
+            right += containerRect.left;
+            top += containerRect.top;
+            bottom += containerRect.top;
+          }
+        }
+        return { left, right, top, bottom };
+      } catch (e) {
+        return null;
+      }
     };
-    // x/y historically meant the requested popup origin (y is selection bottom + 6px).
-    // Keep that fallback for callers that cannot expose a real selection rectangle.
-    const fallbackLeft = finite(x, Math.max(8, (vw - POPUP_MAX_WIDTH_PX) / 2));
-    const fallbackBottom = finite(y, vh / 2) - 6;
-    const left = finite(anchor?.left, fallbackLeft);
-    const top = finite(anchor?.top, Math.max(0, fallbackBottom - 22));
-    const right = finite(anchor?.right, left);
-    const bottom = finite(anchor?.bottom, Math.max(top, fallbackBottom));
+
+    let points = [readCoords(from, "window"), readCoords(to, "window")].filter(Boolean);
+    if (!points.length) {
+      points = [readCoords(from, null), readCoords(to, null)].filter(Boolean);
+    }
+    if (!points.length) {
+      points = [readCoords(from, "local", true), readCoords(to, "local", true)].filter(Boolean);
+    }
+    if (!points.length) return null;
     return {
-      left: Math.min(left, right),
-      top: Math.min(top, bottom),
-      right: Math.max(left, right),
-      bottom: Math.max(top, bottom),
+      left: Math.min(...points.map((p) => p.left)),
+      top: Math.min(...points.map((p) => p.top)),
+      right: Math.max(...points.map((p) => p.right)),
+      bottom: Math.max(...points.map((p) => p.bottom)),
     };
   }
 
-  _placePopup(el, anchor = this.lastPopupAnchor) {
+  _lastPointerAnchor(root = null) {
+    const point = this._lastSelectionPointer;
+    if (!point || Date.now() - point.at > 30000) return null;
+    if (root && point.target && !root.contains(point.target)) return null;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { left: x, top: y - 20, right: x, bottom: y + 2 };
+  }
+
+  _normalizePopupAnchor(x, y, anchor) {
+    const vw = Math.max(1, Number(window.innerWidth) || 1);
+    const vh = Math.max(1, Number(window.innerHeight) || 1);
+    return normalizeViewportAnchor(x, y, anchor, vw, vh);
+  }
+
+  _placePopup(el, anchor = this.lastPopupAnchor, options = {}) {
     if (!el || !el.isConnected) return;
     const margin = 8;
     const vw = Math.max(1, Number(window.innerWidth) || document.documentElement.clientWidth || 1);
     const vh = Math.max(1, Number(window.innerHeight) || document.documentElement.clientHeight || 1);
+    this._applyPopupSize(el);
     let rect = el.getBoundingClientRect();
     if (this._popupDragged) {
       // Preserve the existing drag affordance. A manually moved popup is only kept
@@ -3215,37 +3781,86 @@ module.exports = class MiniTranslator extends Plugin {
       return;
     }
     const gap = 8;
-    const a = anchor || this._normalizePopupAnchor(null, null, null);
+    const a = this._normalizePopupAnchor(null, null, anchor);
+    this.lastPopupAnchor = a;
     const body = this.popupBodyEl && el.contains(this.popupBodyEl) ? this.popupBodyEl : null;
-    // Re-measure against the compact cap on every update. The popup can grow while a
-    // real network stream arrives, but it should remain a small, scrollable overlay.
-    if (body) body.style.maxHeight = POPUP_BODY_MAX_HEIGHT;
+    // 每次原文/译文更新都按当前字数重新计算上限；自然尺寸超过上限后才滚动。
     rect = el.getBoundingClientRect();
     const belowTop = a.bottom + gap;
-    const aboveTop = a.top - rect.height - gap;
-    const belowRoom = vh - margin - belowTop;
-    const aboveRoom = a.top - gap - margin;
-    const belowFits = belowTop + rect.height <= vh - margin;
-    const aboveFits = aboveTop >= margin;
+    const belowRoom = Math.max(0, vh - margin - belowTop);
+    const aboveRoom = Math.max(0, a.top - gap - margin);
 
-    // Below is the default. Only flip above when below would leave any part outside
-    // the viewport and the complete popup fits above the selected text.
-    let placement = "below";
-    if (!belowFits && aboveFits) placement = "above";
-    else if (!belowFits && !aboveFits) {
-      // Extremely tight viewports: use the side with more room and cap the body so
-      // the popup itself stays visible without crossing the selection.
-      placement = aboveRoom > belowRoom ? "above" : "below";
-      const room = Math.max(24, placement === "above" ? aboveRoom : belowRoom);
+    // Once the real source rows are shown, lock the chosen side. Translation text may
+    // make the popup taller, but it must grow/scroll on that side rather than jumping
+    // from below to above (or back) during the request.
+    const storedPlacement =
+      !options.forceRecompute &&
+      (this._popupPlacement === "above" || this._popupPlacement === "below")
+        ? this._popupPlacement
+        : null;
+    let placementHeight = rect.height;
+    if (!storedPlacement && options.lock && Array.isArray(this._popupSlots)) {
+      // Before the API returns, estimate each pending translation row from its source
+      // row. This chooses the correct side up front instead of first showing a tiny
+      // placeholder below and discovering only later that the finished text fits above.
+      const pendingGrowth = this._popupSlots.reduce((sum, slot) => {
+        if (slot?.translated) return sum;
+        const sourceRect = slot?.enEl?.getBoundingClientRect?.();
+        const pendingRect = slot?.zhEl?.getBoundingClientRect?.();
+        const sourceHeight = Number(sourceRect?.height) || 0;
+        const pendingHeight = Number(pendingRect?.height) || 0;
+        return sum + Math.max(0, sourceHeight - pendingHeight);
+      }, 0);
       const bodyHeight = body ? body.getBoundingClientRect().height : 0;
       const chrome = Math.max(0, rect.height - bodyHeight);
-      if (body) body.style.maxHeight = `${Math.max(24, room - chrome)}px`;
+      const bodyCap = Number.parseFloat(body?.style?.maxHeight);
+      placementHeight = Math.min(
+        rect.height + pendingGrowth,
+        chrome + (Number.isFinite(bodyCap) ? bodyCap : rect.height + pendingGrowth)
+      );
+    }
+    let placement =
+      storedPlacement || choosePopupPlacement(a, placementHeight, vh);
+    if (options.lock || storedPlacement) this._popupPlacement = placement;
+
+    const room = placement === "above" ? aboveRoom : belowRoom;
+    const configuredPopupMax =
+      this._popupSizeMetrics?.manualMaxHeight || Math.max(1, vh - margin * 2);
+    // Native manual resize is constrained to the selected side as well as the user's
+    // configured maximum, so an above-popup cannot be dragged down across the source.
+    el.style.maxHeight = `${Math.max(48, Math.min(configuredPopupMax, room))}px`;
+    rect = el.getBoundingClientRect();
+    if (body && rect.height > room) {
+      // Keep the popup entirely on its locked side. Extra text becomes scrollable;
+      // this is what prevents a late API result from pushing the box over the source.
+      const bodyHeight = body ? body.getBoundingClientRect().height : 0;
+      const chrome = Math.max(0, rect.height - bodyHeight);
+      const currentCap = Number.parseFloat(body.style.maxHeight);
+      const sideCap = Math.max(24, room - chrome);
+      body.style.maxHeight = `${Math.min(
+        Number.isFinite(currentCap) ? currentCap : sideCap,
+        sideCap
+      )}px`;
       rect = el.getBoundingClientRect();
     }
 
+    const storedHorizontal =
+      !options.forceRecompute &&
+      (this._popupHorizontalAlignment === "left" ||
+      this._popupHorizontalAlignment === "right")
+        ? this._popupHorizontalAlignment
+        : null;
+    const horizontal =
+      storedHorizontal ||
+      (a.left + rect.width <= vw - margin ? "left" : "right");
+    if (options.lock || storedHorizontal) {
+      this._popupHorizontalAlignment = horizontal;
+    }
     const maxLeft = Math.max(margin, vw - rect.width - margin);
-    const left = Math.min(maxLeft, Math.max(margin, a.left));
-    const desiredTop = placement === "above" ? a.top - rect.height - gap : belowTop;
+    const desiredLeft = horizontal === "right" ? a.right - rect.width : a.left;
+    const left = Math.min(maxLeft, Math.max(margin, desiredLeft));
+    const desiredTop =
+      placement === "above" ? a.top - rect.height - gap : belowTop;
     const maxTop = Math.max(margin, vh - rect.height - margin);
     // In the normal cases desiredTop is already in range. The final clamp only handles
     // a viewport smaller than the popup's chrome; body max-height above handles content.
@@ -3255,12 +3870,127 @@ module.exports = class MiniTranslator extends Plugin {
     el.dataset.placement = placement;
   }
 
+  _popupContentLength() {
+    const slots = Array.isArray(this._popupSlots) ? this._popupSlots : [];
+    if (slots.length) {
+      return slots.reduce((sum, slot) => {
+        const source = String(slot?.source || "");
+        const translated = slot?.translated ? String(slot?.pair?.zh || "") : "";
+        return sum + source.length + translated.length;
+      }, 0);
+    }
+    return String(this.popupBodyEl?.textContent || "").length;
+  }
+
+  _applyPopupSize(el) {
+    if (!el) return;
+    const vw = Math.max(
+      1,
+      Number(window.innerWidth) || document.documentElement.clientWidth || 1
+    );
+    const vh = Math.max(
+      1,
+      Number(window.innerHeight) || document.documentElement.clientHeight || 1
+    );
+    const chars = this._popupContentLength();
+    const metrics = popupMetricsForChars(
+      chars,
+      vw,
+      vh,
+      this.settings?.popupMaxSize || "adaptive",
+      {
+        maxWidth: this.settings?.popupCustomMaxWidth,
+        maxHeight: this.settings?.popupCustomMaxHeight,
+      }
+    );
+    this._popupSizeMetrics = metrics;
+    el.style.minWidth = `${metrics.minWidth}px`;
+    el.style.maxWidth = `${
+      this._popupUserResized ? metrics.resizeMaxWidth : metrics.maxWidth
+    }px`;
+    el.style.maxHeight = `${metrics.manualMaxHeight}px`;
+    el.style.setProperty?.("--mini-popup-text-boost", `${metrics.textBoost}px`);
+    el.style.setProperty?.(
+      "--mini-popup-small-text-boost",
+      `${metrics.smallTextBoost}px`
+    );
+    if (this.popupBodyEl && el.contains(this.popupBodyEl)) {
+      this.popupBodyEl.style.maxHeight = `${
+        this._popupUserResized
+          ? metrics.manualBodyMaxHeight
+          : metrics.bodyMaxHeight
+      }px`;
+    }
+    el.dataset.contentChars = String(chars);
+    el.dataset.displayScale = metrics.displayScale.toFixed(3);
+    el.dataset.maxSize = metrics.sizeMode;
+  }
+
+  _rememberCurrentPopupSize(el) {
+    if (
+      !this.settings?.rememberPopupSize ||
+      !this._popupUserResized ||
+      !el?.isConnected
+    ) {
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    const next = normalizeRememberedPopupSize({
+      width: rect.width,
+      height: rect.height,
+    });
+    if (!next) return;
+    this._popupResizeDirty = false;
+    const previous = normalizeRememberedPopupSize(
+      this.settings.popupLastSize
+    );
+    if (
+      previous &&
+      previous.width === next.width &&
+      previous.height === next.height
+    ) {
+      return;
+    }
+    // Update memory synchronously so opening a new selection immediately after closing
+    // this one can already reuse the size; persistence may finish a moment later.
+    this.settings.popupLastSize = next;
+    try {
+      Promise.resolve(this.saveData?.(this.settings)).catch((error) =>
+        console.warn("[mini-translator] 保存翻译框大小失败", error)
+      );
+    } catch (error) {
+      console.warn("[mini-translator] 保存翻译框大小失败", error);
+    }
+  }
+
+  _scheduleRememberCurrentPopupSize(el) {
+    if (!this.settings?.rememberPopupSize || !this._popupResizeDirty) return;
+    if (this._popupRememberTimer != null) {
+      window.clearTimeout(this._popupRememberTimer);
+    }
+    // ResizeObserver 在拖动期间会高频触发；只在尺寸稳定片刻后落盘一次。
+    this._popupRememberTimer = window.setTimeout(() => {
+      this._popupRememberTimer = null;
+      if (this.popupEl === el && this._popupResizeDirty) {
+        this._rememberCurrentPopupSize(el);
+      }
+    }, 280);
+  }
+
   showPopup(text, x, y, via, pending, anchor = null) {
     this.closePopup();
     // Every popup gets a generation id. A response from a previous selection must not
     // paint into a newly opened popup after the user starts another translation.
     this._popupRunId = (this._popupRunId || 0) + 1;
+    this._popupTranslationDone = false;
     this._popupDragged = false;
+    this._popupResizeDirty = false;
+    const rememberedPopupSize = this.settings?.rememberPopupSize
+      ? normalizeRememberedPopupSize(this.settings.popupLastSize)
+      : null;
+    this._popupUserResized = !!rememberedPopupSize;
+    this._popupPlacement = null;
+    this._popupHorizontalAlignment = null;
     this.lastPopupPos = { x, y };
     this.lastPopupAnchor = this._normalizePopupAnchor(x, y, anchor);
     const el = document.body.createDiv();
@@ -3270,12 +4000,10 @@ module.exports = class MiniTranslator extends Plugin {
       left: `${Math.max(8, this.lastPopupAnchor.left)}px`,
       top: `${Math.max(8, this.lastPopupAnchor.bottom + 8)}px`,
       zIndex: "1000",
-      // Keep short translations compact while capping long ones at a readable width.
-      // The intrinsic width grows with the rendered content and the max-width makes
-      // longer source/translation pairs wrap instead of stretching across the screen.
+      // 短文本保持 fit-content；真正的动态上限由 _applyPopupSize 按字数和视口计算。
       width: "fit-content",
-      minWidth: POPUP_MIN_WIDTH,
-      maxWidth: POPUP_MAX_WIDTH,
+      minWidth: `${POPUP_MIN_WIDTH_PX}px`,
+      maxWidth: `${POPUP_MAX_WIDTH_PX}px`,
       boxSizing: "border-box",
       background: "var(--background-primary)",
       color: "var(--text-normal)",
@@ -3285,13 +4013,15 @@ module.exports = class MiniTranslator extends Plugin {
       fontFamily: "var(--font-interface)",
     });
     const header = el.createDiv();
+    header.addClass("mini-popup-header");
     Object.assign(header.style, {
       display: "flex",
       justifyContent: "space-between",
       alignItems: "center",
       padding: "6px 12px",
       borderBottom: "1px solid var(--background-modifier-border)",
-      fontSize: "var(--font-smaller)",
+      fontSize:
+        "calc(var(--font-smaller) + var(--mini-popup-small-text-boost, 0px))",
       color: "var(--text-muted)",
     });
     this.popupHeaderEl = header;
@@ -3359,9 +4089,10 @@ module.exports = class MiniTranslator extends Plugin {
       e.preventDefault();
     });
     const body = el.createDiv();
+    body.addClass("mini-popup-body");
     Object.assign(body.style, {
       padding: "10px 12px",
-      maxHeight: POPUP_BODY_MAX_HEIGHT,
+      maxHeight: `${POPUP_BODY_MAX_HEIGHT_PX}px`,
       overflow: "auto",
     });
     this.popupBodyEl = body;
@@ -3380,11 +4111,73 @@ module.exports = class MiniTranslator extends Plugin {
     }
     document.body.appendChild(el);
     this.popupEl = el;
+    if (rememberedPopupSize) {
+      // Restore the user's last explicit dimensions. Horizontal size is limited only
+      // by the current viewport; _placePopup separately applies the vertical side limit.
+      this._applyPopupSize(el);
+      el.style.width = `${Math.min(
+        rememberedPopupSize.width,
+        this._popupSizeMetrics.resizeMaxWidth
+      )}px`;
+      el.style.height = `${Math.min(
+        rememberedPopupSize.height,
+        this._popupSizeMetrics.manualMaxHeight
+      )}px`;
+      el.dataset.restoredSize = "true";
+    }
     this._placePopup(el);
-    this._popupResize = () => this._placePopup(this.popupEl);
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      const rect = el.getBoundingClientRect();
+      const inResizeCorner =
+        e.clientX >= rect.right - 18 && e.clientY >= rect.bottom - 18;
+      if (!inResizeCorner) return;
+      // Freeze the current natural size, then expose the viewport width to the
+      // browser's native resize handle. Later content updates preserve this manual size.
+      this._popupUserResized = true;
+      this._popupResizeDirty = true;
+      el.style.width = `${rect.width}px`;
+      el.style.height = `${rect.height}px`;
+      this._placePopup(el, this.lastPopupAnchor, { lock: true });
+      this._scheduleRememberCurrentPopupSize(el);
+    });
+    const ResizeObserverCtor =
+      window.ResizeObserver || globalThis.ResizeObserver;
+    if (typeof ResizeObserverCtor === "function") {
+      this._popupResizeObserver = new ResizeObserverCtor(() => {
+        if (this._popupResizeFrame != null) return;
+        const schedule = window.requestAnimationFrame?.bind(window) ||
+          ((fn) => window.setTimeout(fn, 16));
+        this._popupResizeFrame = schedule(() => {
+          this._popupResizeFrame = null;
+          if (this.popupEl === el) {
+            this._placePopup(el, this.lastPopupAnchor, { lock: true });
+            this._scheduleRememberCurrentPopupSize(el);
+          }
+        });
+      });
+      this._popupResizeObserver.observe(el);
+    }
+    this._popupResize = () => {
+      // A real viewport resize is the one case where reselecting the better side is
+      // preferable. Ordinary source/translation updates keep the side locked.
+      this._popupPlacement = null;
+      this._popupHorizontalAlignment = null;
+      this._placePopup(this.popupEl, this.lastPopupAnchor, {
+        forceRecompute: true,
+        lock: Array.isArray(this._popupSlots) && this._popupSlots.length > 0,
+      });
+    };
     window.addEventListener("resize", this._popupResize);
     this._dismissMouse = (e) => {
-      if (this.popupEl && !this.popupEl.contains(e.target)) this.closePopup();
+      // 译文已经完整输出后，恢复低打扰的单击外部关闭；翻译中单击必须无动作。
+      if (
+        this.popupEl &&
+        !this.popupEl.contains(e.target) &&
+        this._popupTranslationDone
+      ) {
+        this.closePopup();
+      }
     };
     document.addEventListener("mousedown", this._dismissMouse, true);
     this._dismissKey = (e) => {
@@ -3406,7 +4199,7 @@ module.exports = class MiniTranslator extends Plugin {
     const slots = Array.isArray(this._popupSlots) ? this._popupSlots : [];
     this.lastPopupText = slots
       .filter((slot) => slot.translated && slot.pair)
-      .map((slot) => `${slot.pair.en}\n${slot.pair.zh}`)
+      .map((slot) => slot.pair.zh)
       .join("\n\n");
   }
 
@@ -3458,7 +4251,7 @@ module.exports = class MiniTranslator extends Plugin {
       if (labelSpan) labelSpan.textContent = `翻译 · ${via}`;
     }
     this._refreshPopupText();
-    this._placePopup(this.popupEl);
+    this._placePopup(this.popupEl, this.lastPopupAnchor, { lock: true });
   }
 
   updatePopupTranslation(index, pair, via) {
@@ -3498,8 +4291,11 @@ module.exports = class MiniTranslator extends Plugin {
 
   updatePopupPairs(pairs, via) {
     if (!this.popupEl || !this.popupBodyEl) {
-      const p = this.lastPopupPos || { x: window.innerWidth - 520, y: 80 };
-      this.showPopup("", p.x, p.y, via, false, this.lastPopupAnchor);
+      // A result must never resurrect at an arbitrary screen corner. Reuse the last
+      // verified text anchor; if none exists, keep the result in the side panel only.
+      if (!this.lastPopupAnchor) return;
+      const a = this._normalizePopupAnchor(null, null, this.lastPopupAnchor);
+      this.showPopup("", a.left, a.bottom + 6, via, false, a);
     }
     const list = Array.isArray(pairs) ? pairs : [];
     if (
@@ -3536,6 +4332,7 @@ module.exports = class MiniTranslator extends Plugin {
     const labelSpan = this.popupHeaderEl.querySelector("span");
     if (labelSpan) labelSpan.textContent = "翻译失败";
     this._cancelPopupStreams();
+    this._popupTranslationDone = true;
     this.pendingLabel = null;
     this.popupBodyEl.empty();
     this.popupBodyEl.setText(msg);
@@ -3544,6 +4341,19 @@ module.exports = class MiniTranslator extends Plugin {
 
   closePopup() {
     this._popupRunId = (this._popupRunId || 0) + 1;
+    if (this._popupRememberTimer != null) {
+      window.clearTimeout(this._popupRememberTimer);
+      this._popupRememberTimer = null;
+    }
+    if (this._popupResizeDirty && this.popupEl) {
+      this._rememberCurrentPopupSize(this.popupEl);
+    }
+    this._popupTranslationDone = false;
+    this._popupPlacement = null;
+    this._popupHorizontalAlignment = null;
+    this._popupUserResized = false;
+    this._popupResizeDirty = false;
+    this._popupSizeMetrics = null;
     this._cancelPopupStreams();
     this._popupSlots = [];
     this._popupSlotBody = null;
@@ -3562,6 +4372,18 @@ module.exports = class MiniTranslator extends Plugin {
     if (this._popupResize) {
       window.removeEventListener("resize", this._popupResize);
       this._popupResize = null;
+    }
+    if (this._popupResizeObserver) {
+      this._popupResizeObserver.disconnect();
+      this._popupResizeObserver = null;
+    }
+    if (this._popupResizeFrame != null) {
+      if (typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(this._popupResizeFrame);
+      } else {
+        window.clearTimeout?.(this._popupResizeFrame);
+      }
+      this._popupResizeFrame = null;
     }
   }
 
@@ -3645,69 +4467,98 @@ module.exports = class MiniTranslator extends Plugin {
     return null;
   }
 
-  async translateSelection(mode = "sentence") {
+  async translateSelection(mode = "sentence", selectionSnapshot = null) {
     console.log("[mini-translator] 命令已触发");
     const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
     let text = "";
     let x = null;
     let y = null;
     let anchor = null;
-    if (mdView && mdView.editor) {
+    const takeSelectionInfo = (info) => {
+      if (!info?.text) return false;
+      text = String(info.text).trim();
+      anchor = info.anchor || null;
+      const hasFiniteCoord = (value) =>
+        value != null && Number.isFinite(Number(value));
+      x = hasFiniteCoord(info.x) ? Number(info.x) : anchor?.left ?? null;
+      y = hasFiniteCoord(info.y)
+        ? Number(info.y)
+        : anchor
+          ? anchor.bottom + 6
+          : null;
+      return !!text;
+    };
+
+    // Auto-translate captures the actual DOM range at selection time. Using that
+    // snapshot avoids a delayed callback querying stale editor coordinates.
+    if (selectionSnapshot?.text) takeSelectionInfo(selectionSnapshot);
+
+    if (!text && mdView) {
+      // Reading view and modern CodeMirror both expose a real DOM range. Prefer it
+      // because getBoundingClientRect() is already in viewport coordinates.
+      const domInfo = this._readDomSelectionInfo(
+        window.getSelection(),
+        mdView.containerEl || mdView.editor?.containerEl || null
+      );
+      if (domInfo) takeSelectionInfo(domInfo);
+    }
+
+    if (!text && mdView?.editor) {
       text = (mdView.editor.getSelection() || "").trim();
-      const editor = mdView.editor;
-      const from = editor.getCursor("from");
-      const to = editor.getCursor("to");
-      const readCoords = (pos, mode) => {
-        try {
-          const c = editor.coordsAtPos(pos, mode);
-          if (!c) return null;
-          const base = mode === "window" ? null : editor.containerEl.getBoundingClientRect();
-          const left = Number(c.left);
-          const right = Number(c.right);
-          const top = Number(c.top);
-          const bottom = Number(c.bottom);
-          return {
-            left: (Number.isFinite(left) ? left : 0) + (base ? base.left : 0),
-            right: (Number.isFinite(right) ? right : left) + (base ? base.left : 0),
-            top: (Number.isFinite(top) ? top : 0) + (base ? base.top : 0),
-            bottom: (Number.isFinite(bottom) ? bottom : top) + (base ? base.top : 0),
-          };
-        } catch (e) {
-          return null;
-        }
-      };
-      let points = [readCoords(from, "window"), readCoords(to, "window")].filter(Boolean);
-      if (!points.length) {
-        points = [readCoords(from, "local"), readCoords(to, "local")].filter(Boolean);
-      }
-      if (points.length) {
-        anchor = {
-          left: Math.min(...points.map((p) => p.left)),
-          top: Math.min(...points.map((p) => p.top)),
-          right: Math.max(...points.map((p) => Number.isFinite(p.right) ? p.right : p.left)),
-          bottom: Math.max(...points.map((p) => p.bottom)),
-        };
+      anchor = this._editorSelectionAnchor(mdView.editor);
+      if (anchor) {
         x = anchor.left;
         y = anchor.bottom + 6;
       }
-    } else {
-      const info = this.getPdfSelectionInfo();
-      if (info) {
-        text = info.text;
-        x = info.x;
-        y = info.y;
-        anchor = info.anchor || null;
+    }
+    if (text && !anchor && mdView?.editor) {
+      anchor = this._editorSelectionAnchor(mdView.editor);
+      if (anchor) {
+        x = anchor.left;
+        y = anchor.bottom + 6;
       }
+    }
+
+    // Also support native selections in non-Markdown views. PDF iframe selections
+    // still use getPdfSelectionInfo below because their coordinates need an offset.
+    if (!text && !mdView) {
+      const domInfo = this._readDomSelectionInfo(window.getSelection());
+      if (domInfo) takeSelectionInfo(domInfo);
+    }
+
+    if (!text) {
+      const info = this.getPdfSelectionInfo();
+      if (info) takeSelectionInfo(info);
     }
     if (!text) {
       new Notice("没有拿到选中的文本：请在笔记或 PDF 里先选中文本再按快捷键", 6000);
       return;
     }
-    // 源文本规范化：清不可见字符 + 把 Unicode 数学子/上标字母还原为 ASCII
-    text = demathify(cleanInvisibles(text));
+
+    // Last-resort anchor for adapters that provide selection text but no geometry.
+    // Never fall back to an arbitrary screen corner: that was the main source of the
+    // apparent "flying" popup outside PDFs.
+    if (!anchor) {
+      anchor = this._lastPointerAnchor(
+        mdView?.containerEl || mdView?.editor?.containerEl || null
+      );
+    }
+    if (!anchor && Number.isFinite(x) && Number.isFinite(y)) {
+      anchor = { left: x, top: y - 28, right: x, bottom: y - 6 };
+    }
+    if (!anchor) {
+      new Notice("已取得选中文本，但无法定位文字位置；请重新划选后再试", 4500);
+      return;
+    }
+    anchor = this._normalizePopupAnchor(x, y, anchor);
+    x = anchor.left;
+    y = anchor.bottom + 6;
+
+    // 源文本规范化：清不可见字符、还原 Unicode 数学字符，并先合并 PDF 硬换行/断行单词。
+    text = normalizeTranslationInput(text);
     // 立刻弹窗；译文返回后直接填充，不额外等待或播放打字机动画。
-    const px = x != null ? x : window.innerWidth - 520;
-    const py = y != null ? y : 80;
+    const px = x;
+    const py = y;
     const isWord = WORD_RE.test(text);
     const sentenceList = !isWord && mode !== "paragraph" ? splitSentences(text) : null;
     const translateProfile = findProfile(this.settings.primarySource);
@@ -3797,6 +4648,8 @@ module.exports = class MiniTranslator extends Plugin {
         this.panelView.show(pairs, meta);
       }
       this.updatePopupPairs(pairs, via);
+      // 到这里译文已经完整输出；从现在起弹窗外单击即可关闭，不再视为取消翻译。
+      if (this._popupRunId === popupRunId) this._popupTranslationDone = true;
       // 历史记录：附上来源（哪个文件、PDF 第几页 / 笔记名）
       let hFile = "";
       let hPage = null;
@@ -3828,7 +4681,16 @@ module.exports = class MiniTranslator extends Plugin {
     const isPdf = (l) =>
       l && l.view && l.view.getViewType && l.view.getViewType() === "pdf";
     let leaf = this.app.workspace.getMostRecentLeaf();
-    if (!isPdf(leaf)) leaf = this.app.workspace.getLeavesOfType("pdf")[0];
+    const pdfLeaves = this.app.workspace.getLeavesOfType("pdf");
+    // 点击侧边栏按钮后“最近叶子”可能已经变成侧边栏本身；此时优先找
+    // workspace 仍记录的当前 PDF 文件，避免多开 PDF 时误翻第一份。
+    if (!isPdf(leaf)) {
+      const activeFile = this.app.workspace.getActiveFile?.();
+      if (activeFile?.extension === "pdf") {
+        leaf = pdfLeaves.find((l) => l.view?.file?.path === activeFile.path);
+      }
+    }
+    if (!isPdf(leaf)) leaf = pdfLeaves[0];
     if (!isPdf(leaf)) return null;
     // 策略1：官方内部链（1.8+；旧版本里 child 本身就是 viewer 实例）
     try {
