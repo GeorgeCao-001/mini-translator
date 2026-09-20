@@ -45,8 +45,8 @@ GitHub Release **只上传以下三个独立附件**：
 | `main.js`、`styles.css` | 插件源代码与样式源码 |
 | `src/i18n.js` | 简体中文 / English 界面字典与语言切换逻辑 |
 | `src/orbs/translation-orb.js`、`src/orbs/ink-water-orb.js` | 悬浮球模块源码 |
-| `vendor/pdfjs/pdf.min.js`、`vendor/pdfjs/pdf.worker.js` | 固定版本的 PDF.js 源文件 |
-| `scripts/` | 发布构建、隔离烟测与完整发布检查脚本 |
+| `scripts/vendor/pdfjs/pdf.min.js`、`scripts/vendor/pdfjs/pdf.worker.js` | 固定版本的 PDF.js 发布构建输入 |
+| `scripts/` | 发布构建、第三方构建输入、隔离烟测与完整发布检查脚本 |
 | `tests/` | 自动回归测试与手动 PDF 解析诊断，不进入 Release |
 | `docs/PRE_RELEASE_HISTORY.md` | 从主代码移出的发布前内部迭代记录，不进入 Release |
 | `docs/RELEASE.md` | 发布构建、文件分类与上架检查说明，不进入 Release |
@@ -55,7 +55,7 @@ GitHub Release **只上传以下三个独立附件**：
 ### 目录结构原则
 
 - 根目录有意保留 `main.js`、`styles.css`、`manifest.json` 和 `versions.json`：它们是 Obsidian 插件的标准入口与市场元数据，不应为了「根目录看起来更空」而移走。
-- 自有的内部模块放在 `src/`；第三方固定运行时放在 `vendor/`；构建脚本、测试和文档分别放在 `scripts/`、`tests/` 和 `docs/`。
+- 自有的内部模块放在 `src/`；第三方固定构建输入放在 `scripts/vendor/`；构建脚本、测试和文档分别放在 `scripts/`、`tests/` 和 `docs/`。
 - 市场发布物仍只是 `dist/` 中的三个文件；源码目录层次不会增加用户安装的文件数。
 
 ## 绝不能发布或提交的文件
@@ -75,7 +75,7 @@ GitHub Release **只上传以下三个独立附件**：
 node scripts/check-release.js
 ```
 
-完整检查会依次运行源码语法检查、`tests/` 下四组自动化测试（包含中英字典键与占位符一致性）、自包含发布构建及隔离烟测、连续构建 SHA-256 一致性检查和 `git diff --check`。所有测试均为离线测试，不读取 `data.json`，也不会调用真实翻译服务。
+完整检查会依次运行源码语法检查、`tests/` 下四组自动化测试（包含中英字典键与占位符一致性）、自包含发布构建及隔离烟测、PDF 实际解析测试、社区扫描高风险模式检查、连续构建 SHA-256 一致性检查和 `git diff --check`。发布构建会移除 PDF.js 不需要的动态脚本加载与 Node 文件系统入口，并检查已知 CSS 兼容性警告不会重新进入附件。所有测试均为离线测试，不读取 `data.json`，也不会调用真实翻译服务。
 
 然后确认：
 

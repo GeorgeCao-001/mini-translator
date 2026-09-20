@@ -42,4 +42,4 @@ Do not add test PDFs, translated documents, Vault data, or credentials to the re
 node scripts/check-release.js
 ```
 
-This runs syntax checks, all automated suites, the self-contained release build and smoke test, a deterministic-build comparison, and `git diff --check`.
+This runs syntax checks, all automated suites, the self-contained release build and smoke test, an end-to-end parse of an in-memory PDF through the hardened embedded PDF.js worker runtime, a deterministic-build comparison, and `git diff --check`.

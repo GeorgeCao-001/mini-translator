@@ -1,5 +1,5 @@
 // 复现脚本：在 Node 里用与插件完全相同的代码路径（main.js 的 extractDocBlocks
-// + 插件自带的 vendor/pdfjs/pdf.min.js）解析 vault 里的真实 PDF。
+// + 插件发布构建使用的 scripts/vendor/pdfjs/pdf.min.js）解析 vault 里的真实 PDF。
 // 用法：node tests/manual/repro-parse.js <pdf1> [pdf2 ...]
 const Module = require("module");
 const origLoad = Module._load;
@@ -31,12 +31,12 @@ Module._load = origLoad;
 
 let pdfjs;
 try {
-  pdfjs = require(path.join(projectRoot, "vendor", "pdfjs", "pdf.min.js"));
+  pdfjs = require(path.join(projectRoot, "scripts", "vendor", "pdfjs", "pdf.min.js"));
 } catch (e) {
   console.log("REQUIRE pdf.min.js FAILED:", e.message);
   global.DOMMatrix ||= class {};
   global.Path2D ||= class {};
-  pdfjs = require(path.join(projectRoot, "vendor", "pdfjs", "pdf.min.js"));
+  pdfjs = require(path.join(projectRoot, "scripts", "vendor", "pdfjs", "pdf.min.js"));
 }
 
 (async () => {

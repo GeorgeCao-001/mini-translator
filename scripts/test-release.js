@@ -83,6 +83,72 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 const source = fs.readFileSync(mainFile, "utf8");
+// The release bundle must not retain the old project-owned Node filesystem
+// fallback. PDF.js itself is embedded below and is audited separately as a
+// third-party component; this check only guards Mini Translator's deleted path.
+if (
+  source.includes('const fs = require("fs");') ||
+  source.includes('fs.readFileSync(c, "utf8")') ||
+  source.includes("function pluginFileCandidates")
+) {
+  throw new Error("release bundle still contains the removed project filesystem fallback");
+}
+if (!source.includes("lib.getDocument({ data, isEvalSupported: false })")) {
+  throw new Error("release bundle does not disable PDF.js generated-function optimizations");
+}
+
+// The upstream PDF.js inputs are kept unmodified under scripts/vendor. The
+// release hardening must remove its fake-worker script injection and disable
+// its unused Node-only filesystem branches. Other reviewed third-party
+// constructs must remain byte-for-byte represented by occurrence count.
+const pdfSource = fs.readFileSync(
+  path.join(root, "scripts", "vendor", "pdfjs", "pdf.min.js"),
+  "utf8"
+);
+const workerSource = fs.readFileSync(
+  path.join(root, "scripts", "vendor", "pdfjs", "pdf.worker.js"),
+  "utf8"
+);
+if (/(?:document\.)?createElement\(["']script["']\)/.test(source)) {
+  throw new Error("release bundle still creates script elements dynamically");
+}
+if (!source.includes("PDF.js script injection uses a bundled worker fallback")) {
+  throw new Error("release bundle is missing the PDF.js security modification notice");
+}
+if (/require\(["']fs["']\)/.test(source)) {
+  throw new Error("release bundle still imports the Node filesystem module");
+}
+if (!source.includes("PDF.js Node filesystem access is disabled in Mini Translator")) {
+  throw new Error("release bundle is missing the fail-closed PDF.js filesystem guard");
+}
+const scannerPatterns = [
+  "new Function",
+  'eval("require")',
+];
+const countOccurrences = (text, pattern) => text.split(pattern).length - 1;
+for (const pattern of scannerPatterns) {
+  const expected = countOccurrences(pdfSource, pattern) + countOccurrences(workerSource, pattern);
+  const actual = countOccurrences(source, pattern);
+  if (actual !== expected) {
+    throw new Error(
+      `unexpected release occurrence count for ${pattern}: expected ${expected}, got ${actual}`
+    );
+  }
+}
+const releaseCss = fs.readFileSync(path.join(root, "dist", "styles.css"), "utf8");
+const cssWarningPatterns = [
+  ["!important", /!important\b/],
+  ["text-indent", /\btext-indent\s*:/],
+  ["clip-path", /\b(?:-webkit-)?clip-path\s*:/],
+  ["mjx-container type selector", /(^|[,\s>+~])mjx-container(?=[\s.#[:]|$)/m],
+];
+for (const [label, pattern] of cssWarningPatterns) {
+  if (pattern.test(releaseCss)) {
+    throw new Error(`release stylesheet still contains scanner warning pattern: ${label}`);
+  }
+}
+console.log("PASS dynamic scripts and Node filesystem access removed from the release");
+console.log("PASS known Obsidian CSS warning patterns removed from the release");
 vm.runInContext(
   `${source}\n;globalThis.__releaseTest = { loadPdfJs, loadOrbModule, BUNDLED_RUNTIME };`,
   sandbox,
@@ -104,10 +170,32 @@ if (runtime.getPdfWorkerSource().length < 1_000_000) {
   throw new Error("发布构建中的 PDF worker 不完整");
 }
 new vm.Script(runtime.getPdfWorkerSource(), { filename: "embedded-pdf.worker.js" });
+const workerSandbox = {
+  console,
+  TextDecoder,
+  TextEncoder,
+  Uint8Array,
+  ArrayBuffer,
+  structuredClone,
+  ReadableStream,
+  setTimeout,
+  clearTimeout,
+};
+vm.createContext(workerSandbox);
+vm.runInContext(runtime.getPdfWorkerSource(), workerSandbox, {
+  filename: "embedded-pdf.worker.js",
+});
+if (typeof workerSandbox.pdfjsWorker?.WorkerMessageHandler !== "function") {
+  throw new Error("Blob worker source did not export WorkerMessageHandler");
+}
 
 const pdf = sandbox.__releaseTest.loadPdfJs({});
 if (typeof pdf?.getDocument !== "function") {
   throw new Error("内嵌 PDF.js 没有正确导出 getDocument");
+}
+const loadScriptBody = Function.prototype.toString.call(pdf.loadScript);
+if (!loadScriptBody.includes("loadPdfWorkerFallback") || loadScriptBody.includes("createElement")) {
+  throw new Error("PDF.js fake-worker script loader was not disabled");
 }
 if (pdf.GlobalWorkerOptions.workerSrc !== "blob:mini-translator-release-test") {
   throw new Error("内嵌 PDF worker 没有设置为 Blob URL");

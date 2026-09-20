@@ -28,7 +28,8 @@ const {
   getLanguage,
 } = require("obsidian");
 
-// 发布构建会把 PDF.js、worker 与悬浮球模块注入这里；源码运行时仍可从仓库文件加载。
+// Release builds inject PDF.js, its worker, the translation orb, and i18n here.
+// The unbuilt entry point is for source-level tests, not direct Obsidian installation.
 const BUNDLED_RUNTIME = null;
 const I18N = BUNDLED_RUNTIME?.i18n || require("./src/i18n.js");
 const {
@@ -2588,12 +2589,9 @@ function fmtHistTime(ts) {
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// ---------- pdf.js 库加载：始终用插件自带的构建，绝对路径加载，worker 用 blob URL ----------
-// 关键坑：Obsidian 插件里 require('./相对路径') 锚在应用根而非插件目录，必须显式构造绝对路径。
-// 依次尝试 __dirname（若环境提供且指向插件目录）→ vault basePath + manifest.dir → 相对路径（Node 测试）。
-// worker 读本地文件建 blob URL，绕开 app:// 协议下 new Worker 被拒/CSP 拦截；
-// worker 只保留 pdf.worker.js 一份：blob URL 主路径读它，pdf.js 内部 fake-worker 兜底
-// 也指向它，两条路共用一个文件，不冗余。
+// ---------- PDF.js runtime: the release bundle embeds PDF.js and its worker ----------
+// The source entry point intentionally has no filesystem fallback. build-release.js
+// injects BUNDLED_RUNTIME, and the worker is installed from an in-memory Blob URL.
 let PDFJS_LIB = null;
 let PDF_WORKER_BLOB_URL = null;
 const FIGURE_REGION_CACHE = new WeakMap();
@@ -2615,92 +2613,28 @@ function installPdfWorkerBlob(plugin, lib, code) {
     });
   }
 }
-function pluginFileCandidates(plugin, relParts) {
-  const path = require("path");
-  const rel = path.join(...relParts);
-  const cands = [];
-  try {
-    if (typeof __dirname !== "undefined" && __dirname)
-      cands.push(path.join(__dirname, rel));
-  } catch (e) {}
-  try {
-    const base = plugin.app.vault.adapter.basePath;
-    if (base) cands.push(path.join(base, plugin.manifest.dir, rel));
-  } catch (e) {}
-  cands.push("./" + rel.split(path.sep).join("/")); // 相对 require 兜底（Node 测试环境）
-  return cands;
-}
 function loadPdfJs(plugin) {
   if (PDFJS_LIB) return PDFJS_LIB;
-  if (BUNDLED_RUNTIME?.loadPdfJs) {
-    const lib = BUNDLED_RUNTIME.loadPdfJs();
-    const code = BUNDLED_RUNTIME.getPdfWorkerSource();
-    if (!code) throw new Error("发布构建中的 PDF worker 为空");
-    if (!lib.GlobalWorkerOptions.workerSrc) {
-      installPdfWorkerBlob(plugin, lib, code);
-    }
-    PDFJS_LIB = lib;
-    return lib;
+  if (!BUNDLED_RUNTIME?.loadPdfJs) {
+    throw new Error("PDF.js must be loaded from the bundled release runtime");
   }
-  let lib = null;
-  let err = null;
-  for (const c of pluginFileCandidates(plugin, ["vendor", "pdfjs", "pdf.min.js"])) {
-    try {
-      lib = require(c);
-      break;
-    } catch (e) {
-      err = e;
-    }
-  }
-  if (!lib) throw new Error(`加载自带 pdf.js 失败：${err?.message || err}`);
-  const fs = require("fs");
-  for (const c of pluginFileCandidates(plugin, ["vendor", "pdfjs", "pdf.worker.js"])) {
-    try {
-      const code = fs.readFileSync(c, "utf8");
-      installPdfWorkerBlob(plugin, lib, code);
-      break;
-    } catch (e) {
-      err = e;
-    }
-  }
-  if (!lib.GlobalWorkerOptions.workerSrc) {
-    console.warn("[mini-translator] blob worker 构建失败，改用资源路径:", err);
-    try {
-      lib.GlobalWorkerOptions.workerSrc =
-        plugin.app.vault.adapter.getResourcePath(
-          plugin.manifest.dir + "/vendor/pdfjs/pdf.worker.js"
-        );
-    } catch (e2) {
-      console.warn("[mini-translator] worker 设置全部失败:", e2);
-    }
-  }
+  const lib = BUNDLED_RUNTIME.loadPdfJs();
+  const code = BUNDLED_RUNTIME.getPdfWorkerSource();
+  if (!code) throw new Error("The bundled PDF worker is empty");
+  if (!lib.GlobalWorkerOptions.workerSrc) installPdfWorkerBlob(plugin, lib, code);
   PDFJS_LIB = lib;
   return lib;
 }
 
-// ---------- 悬浮球模块加载（纯 DOM，零依赖），同样走绝对路径锚定 ----------
+// ---------- Translation orb runtime: loaded from the bundled release runtime ----------
 let ORB_MOD = null;
 function loadOrbModule(plugin) {
   if (ORB_MOD) return ORB_MOD;
-  if (BUNDLED_RUNTIME?.loadOrbModule) {
-    ORB_MOD = BUNDLED_RUNTIME.loadOrbModule();
-    return ORB_MOD;
+  if (!BUNDLED_RUNTIME?.loadOrbModule) {
+    throw new Error("The translation orb must be loaded from the bundled release runtime");
   }
-  let mod = null;
-  let err = null;
-  for (const c of pluginFileCandidates(plugin, ["src", "orbs", "translation-orb.js"])) {
-    try {
-      mod = require(c);
-      break;
-    } catch (e) {
-      err = e;
-    }
-  }
-  if (!mod || typeof mod.TranslationOrbController !== "function") {
-    throw new Error(`加载 translation-orb.js 失败：${err?.message || err}`);
-  }
-  ORB_MOD = mod;
-  return mod;
+  ORB_MOD = BUNDLED_RUNTIME.loadOrbModule();
+  return ORB_MOD;
 }
 
 // 取任意 vault PDF 文件的文档对象：已在某视图中打开则直接复用其文档，否则独立解析二进制
@@ -2720,7 +2654,10 @@ async function getPdfDocForFile(plugin, file) {
   }
   const lib = loadPdfJs(plugin);
   const data = new Uint8Array(await plugin.app.vault.readBinary(file));
-  const doc = await lib.getDocument({ data }).promise;
+  // PDF.js has interpreter fallbacks for its generated-function optimizations.
+  // Disable those optimizations for plugin-owned parsing so untrusted PDFs do
+  // not enable runtime code generation in Mini Translator's normal path.
+  const doc = await lib.getDocument({ data, isEvalSupported: false }).promise;
   return { doc };
 }
 
@@ -3229,6 +3166,13 @@ class TranslateProgressModal extends Modal {
     this._lastSt = st;
     if (!st.total) {
       this.modalEl.addClass("mini-prog-indet"); // 无总量时脉动动画
+      // Determinate stages set inline width/transform values for compositor-only
+      // progress updates. Clear them before the indeterminate CSS animation so
+      // the stylesheet can use its narrower sliding segment without !important.
+      if (this.barFill) {
+        this.barFill.style.removeProperty("width");
+        this.barFill.style.removeProperty("transform");
+      }
       if (this.metaEl) this.metaEl.setText("");
       return;
     }

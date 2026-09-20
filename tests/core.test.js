@@ -475,8 +475,7 @@ eq("remember-user-size-not-temporary-clamped-rect", popupPlugin.settings.popupLa
   height: 700,
 });
 
-// --- loadPdfJs：模拟 Obsidian 的 require 锚定（相对路径锚到不存在的应用根）也能加载成功 ---
-const FAKE_APP_ROOT = nodePath.join(process.cwd(), "nonexistent-app-root");
+// --- loadPdfJs: source files intentionally require the bundled release runtime ---
 const sandbox2 = {
   window: {},
   document: {},
@@ -488,34 +487,36 @@ const sandbox2 = {
   clearTimeout,
   Blob,
   URL: { createObjectURL: () => "blob:test" },
-  // 模拟 Obsidian：除本地化模块外，相对 require 解析到应用根；裸模块正常。
   require: (r) =>
     r === "./src/i18n.js"
       ? require(nodePath.join(PROJECT_ROOT, "src", "i18n.js"))
-      : r.startsWith(".")
-        ? require(nodePath.join(FAKE_APP_ROOT, r))
-        : require(r),
+      : require(r),
 };
 vm.createContext(sandbox2);
 vm.runInContext(src + "\n;__exports = { loadPdfJs, loadOrbModule };", sandbox2);
-const pluginStub = {
-  manifest: { dir: "." },
-  app: {
-    vault: {
-      // 测试既可从源码仓库运行，也可从安装后的插件目录运行。
-      adapter: { basePath: PROJECT_ROOT },
-    },
-  },
-};
-const lib = sandbox2.__exports.loadPdfJs(pluginStub);
-eq("pdfjs-loads-via-anchors", !!lib && typeof lib.getDocument === "function", true);
-eq("worker-src-set", !!String(lib.GlobalWorkerOptions.workerSrc || "").length, true);
-
-// --- loadOrbModule：纯 CJS 的 translation-orb.js 经绝对路径锚点能 require 出导出 ---
-const orbMod = sandbox2.__exports.loadOrbModule(pluginStub);
+const pluginStub = {};
+let pdfRuntimeError = "";
+try {
+  sandbox2.__exports.loadPdfJs(pluginStub);
+} catch (error) {
+  pdfRuntimeError = String(error && error.message ? error.message : error);
+}
 eq(
-  "orb-module-loads",
-  !!orbMod && typeof orbMod.TranslationOrbController === "function" && typeof orbMod.createDefaultSkinRegistry === "function",
+  "source-build-requires-bundled-pdf-runtime",
+  /bundled release runtime/.test(pdfRuntimeError),
+  true
+);
+
+// --- loadOrbModule: source files intentionally require the bundled release runtime ---
+let orbRuntimeError = "";
+try {
+  sandbox2.__exports.loadOrbModule(pluginStub);
+} catch (error) {
+  orbRuntimeError = String(error && error.message ? error.message : error);
+}
+eq(
+  "source-build-requires-bundled-orb-runtime",
+  /bundled release runtime/.test(orbRuntimeError),
   true
 );
 

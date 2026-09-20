@@ -35,7 +35,6 @@
 /* Obsidian 1.8+ 有些主题把 cssclasses 挂在 markdown-preview-section，
    这里补上该挂载点，避免主题/版本变化导致段首缩进失效。 */
 .markdown-preview-section.mini-translator-full-translation p,
-.markdown-preview-view .markdown-preview-section.mini-translator-full-translation p,
 .mini-translator-full-translation .markdown-preview-section p {
   margin-block: 0.9em 1.15em;
   font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
@@ -43,37 +42,49 @@
   line-height: 1.92;
   letter-spacing: 0.012em;
   text-align: start;
-  text-indent: 2em !important;
+  --mini-translator-first-line-indent: 2em;
+}
+
+/* Obsidian's desktop and mobile WebViews do not support native first-line indentation equally.
+   An empty inline spacer preserves first-line indentation without affecting
+   copied text or indenting wrapped lines. */
+.markdown-preview-view.mini-translator-full-translation p::before,
+.mini-translator-full-translation.markdown-preview-view p::before,
+.markdown-preview-section.mini-translator-full-translation p::before,
+.mini-translator-full-translation .markdown-preview-section p::before {
+  content: "";
+  display: inline-block;
+  inline-size: var(--mini-translator-first-line-indent, 2em);
 }
 
 /* 非中文全文按目标文字系统排版；生成文件会在 cssclasses 中写入 script class。 */
-.mini-translator-script-latin p,
-.mini-translator-script-cyrillic p,
-.mini-translator-script-greek p,
-.mini-translator-script-other p {
-  font-family: Georgia, "Times New Roman", "Noto Serif", serif !important;
+.mini-translator-full-translation.mini-translator-script-latin p,
+.mini-translator-full-translation.mini-translator-script-cyrillic p,
+.mini-translator-full-translation.mini-translator-script-greek p,
+.mini-translator-full-translation.mini-translator-script-other p {
+  font-family: Georgia, "Times New Roman", "Noto Serif", serif;
   letter-spacing: 0.006em;
-  text-indent: 1.35em !important;
+  --mini-translator-first-line-indent: 1.35em;
 }
 
-.mini-translator-script-hangul p {
-  font-family: "Noto Serif KR", "Nanum Myeongjo", serif !important;
-  text-indent: 1em !important;
+.mini-translator-full-translation.mini-translator-script-hangul p {
+  font-family: "Noto Serif KR", "Nanum Myeongjo", serif;
+  --mini-translator-first-line-indent: 1em;
 }
 
-.mini-translator-script-indic p,
-.mini-translator-script-seasia p {
-  font-family: "Noto Serif", "Nirmala UI", "Leelawadee UI", serif !important;
+.mini-translator-full-translation.mini-translator-script-indic p,
+.mini-translator-full-translation.mini-translator-script-seasia p {
+  font-family: "Noto Serif", "Nirmala UI", "Leelawadee UI", serif;
   line-height: 2;
-  text-indent: 1em !important;
+  --mini-translator-first-line-indent: 1em;
 }
 
-.mini-translator-script-rtl p {
+.mini-translator-full-translation.mini-translator-script-rtl p {
   direction: rtl;
   text-align: right;
-  font-family: "Noto Naskh Arabic", "Noto Sans Arabic", "Segoe UI", serif !important;
+  font-family: "Noto Naskh Arabic", "Noto Sans Arabic", "Segoe UI", serif;
   line-height: 2;
-  text-indent: 1.4em !important;
+  --mini-translator-first-line-indent: 1.4em;
 }
 
 .markdown-preview-view.mini-translator-full-translation h1,
@@ -103,12 +114,12 @@
 
 .markdown-preview-view.mini-translator-full-translation .math-block,
 .mini-translator-full-translation.markdown-preview-view .math-block,
-.markdown-preview-view.mini-translator-full-translation mjx-container[display="true"],
-.mini-translator-full-translation.markdown-preview-view mjx-container[display="true"] {
+.markdown-preview-view.mini-translator-full-translation .MathJax[display="true"],
+.mini-translator-full-translation.markdown-preview-view .MathJax[display="true"] {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  margin-block: 1.25rem !important;
+  margin-block: 1.25rem;
   padding: 0.85rem 1rem;
   border-radius: 8px;
   background: color-mix(in srgb, var(--background-secondary) 76%, transparent);
@@ -341,7 +352,7 @@
 }
 
 .mini-target-line[data-script="rtl"] {
-  text-indent: 1.4em;
+  --mini-translator-first-line-indent: 1.4em;
 }
 
 /* 中文文本规范：段首缩进两字符；词典释义是条目式，不缩进；可光标选中复制 */
@@ -350,9 +361,15 @@
   color: var(--text-normal);
   line-height: 1.75;
   margin-bottom: 12px;
-  text-indent: 2em;
+  --mini-translator-first-line-indent: 2em;
   white-space: pre-wrap;
   user-select: text;
+}
+
+.mini-zh-line::before {
+  content: "";
+  display: inline-block;
+  inline-size: var(--mini-translator-first-line-indent, 2em);
 }
 
 .mini-target-line[data-script="latin"],
@@ -360,20 +377,20 @@
 .mini-target-line[data-script="greek"],
 .mini-target-line[data-script="other"] {
   font-family: Georgia, "Times New Roman", "Noto Serif", serif;
-  text-indent: 1.35em;
+  --mini-translator-first-line-indent: 1.35em;
   letter-spacing: 0.006em;
 }
 
 .mini-target-line[data-script="hangul"] {
   font-family: "Noto Serif KR", "Nanum Myeongjo", serif;
-  text-indent: 1em;
+  --mini-translator-first-line-indent: 1em;
 }
 
 .mini-target-line[data-script="indic"],
 .mini-target-line[data-script="seasia"] {
   font-family: "Noto Serif", "Nirmala UI", "Leelawadee UI", serif;
   line-height: 1.95;
-  text-indent: 1em;
+  --mini-translator-first-line-indent: 1em;
 }
 
 .mini-zh-pending {
@@ -433,7 +450,6 @@
   color: var(--text-normal);
   line-height: 1.75;
   margin-bottom: 12px;
-  text-indent: 0;
   white-space: pre-wrap;
   user-select: text;
 }
@@ -736,7 +752,7 @@
   margin-top: 4px;
 }
 .mini-prog-indet .mini-prog-fill {
-  width: 35% !important;
+  width: 35%;
   transition: none;
   animation: mini-prog-slide 1.4s ease-in-out infinite;
 }
@@ -810,7 +826,7 @@
 }
 
 .translation-orb-host[hidden] {
-  display: none !important;
+  display: none;
 }
 
 .translation-orb-host.is-dragging {
@@ -1159,33 +1175,38 @@
   background: linear-gradient(180deg, transparent 43%, rgb(255 255 255 / 0.12));
 }
 
-/* Frost prism: static clipped facets, intentionally without ambient motion. */
+/* Frost prism: static skewed facets, intentionally without ambient motion. */
 .translation-orb[data-skin="frost-prism"] .translation-orb__layer--a {
   inset: 3px 14px 6px 3px;
-  clip-path: polygon(0 0, 100% 18%, 55% 100%, 8% 68%);
+  border-radius: 28% 72% 46% 54% / 18% 34% 66% 82%;
   background: linear-gradient(142deg, var(--translation-orb-tone-c), var(--translation-orb-tone-a));
   opacity: 0.65;
+  transform: rotate(13deg) skewX(-8deg);
 }
 
 .translation-orb[data-skin="frost-prism"] .translation-orb__layer--b {
   inset: 9px 2px 2px 15px;
-  clip-path: polygon(42% 0, 100% 23%, 84% 100%, 0 72%);
+  border-radius: 72% 28% 22% 64% / 24% 38% 62% 76%;
   background: linear-gradient(30deg, var(--translation-orb-tone-a), var(--translation-orb-tone-b));
   opacity: 0.6;
+  transform: rotate(-12deg) skewY(7deg);
 }
 
 .translation-orb[data-skin="frost-prism"] .translation-orb__layer--c {
   inset: 2px 4px 17px 12px;
-  clip-path: polygon(10% 0, 100% 0, 68% 100%, 0 72%);
+  border-radius: 38% 62% 70% 30% / 20% 26% 74% 80%;
   background: var(--translation-orb-tone-c);
   opacity: 0.42;
+  transform: rotate(8deg) skewX(6deg);
 }
 
 .translation-orb[data-skin="frost-prism"] .translation-orb__texture {
   inset: 5px;
   z-index: 4;
-  clip-path: polygon(48% 0, 54% 42%, 100% 68%, 57% 61%, 33% 100%, 43% 56%, 0 29%, 39% 45%);
-  background: rgb(255 255 255 / 0.36);
+  border-radius: 50%;
+  background:
+    linear-gradient(78deg, transparent 0 46%, rgb(255 255 255 / 0.34) 47% 50%, transparent 51%),
+    linear-gradient(146deg, transparent 0 48%, rgb(255 255 255 / 0.3) 49% 53%, transparent 54%);
   opacity: 0.72;
 }
 
@@ -1240,22 +1261,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .translation-orb {
-    animation: none !important;
-    transition: none !important;
+  .translation-orb.translation-orb,
+  .translation-orb.translation-orb[data-skin] * {
+    animation: none;
+    transition: none;
   }
 
-  .translation-orb * {
-    animation: none !important;
-    transition: none !important;
-  }
-
-  /* 伪元素不命中 * 选择器：流光/金环/光晕也要一并静止 */
-  .translation-orb::after,
-  .translation-orb__core::before,
-  .translation-orb__halo {
-    animation: none !important;
-    transition: none !important;
+  /* 伪元素不命中 * 选择器：流光/金环/光晕也要一并静止。 */
+  .translation-orb.translation-orb::after,
+  .translation-orb.translation-orb .translation-orb__core::before,
+  .translation-orb.translation-orb .translation-orb__halo {
+    animation: none;
+    transition: none;
   }
 }
 

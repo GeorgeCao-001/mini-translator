@@ -29,6 +29,7 @@ run("Source syntax", process.execPath, ["--check", "main.js"]);
 run("Localization syntax", process.execPath, ["--check", "src/i18n.js"]);
 run("Build script syntax", process.execPath, ["--check", "scripts/build-release.js"]);
 run("Release test syntax", process.execPath, ["--check", "scripts/test-release.js"]);
+run("PDF runtime test syntax", process.execPath, ["--check", "scripts/test-pdf-runtime.js"]);
 run("Core tests", process.execPath, ["tests/core.test.js"]);
 run("Localization tests", process.execPath, ["tests/i18n.test.js"]);
 run("Configuration UI tests", process.execPath, ["tests/config-ui.test.js"]);

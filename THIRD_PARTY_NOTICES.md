@@ -13,9 +13,9 @@ Mini Translator as a whole is distributed under the GNU Affero General Public Li
 - Copyright notice: Copyright 2023 Mozilla Foundation
 - License: Apache License 2.0
 - License text: [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt)
-- Bundled files: `vendor/pdfjs/pdf.min.js` and `vendor/pdfjs/pdf.worker.js`
+- Bundled build inputs: `scripts/vendor/pdfjs/pdf.min.js` and `scripts/vendor/pdfjs/pdf.worker.js`
 
-The release build embeds both files into the distributed `main.js`; their upstream copyright and license notices remain intact.
+The release build embeds both files into the distributed `main.js`; their upstream copyright and license notices remain intact. Mini Translator's release builder replaces PDF.js's browser fake-worker script-element loader with a statically bundled main-thread worker fallback, so a failed Web Worker cannot trigger dynamic script injection. It also disables the generic bundle's three Node-only filesystem branches: the plugin always supplies an in-memory `Uint8Array`, and any unexpected attempt to enter those branches fails closed. The normal Blob-backed Web Worker path and the worker implementation remain available.
 
 ## Adapted code
 

@@ -13,10 +13,6 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8").replace(/^\uFEFF/, "");
 }
 
-function jsString(value) {
-  return JSON.stringify(value).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
-}
-
 function removeModuleExport(source, pattern, label) {
   const next = source.replace(pattern, "");
   if (next === source) throw new Error(`无法移除 ${label} 的 CommonJS 导出`);
@@ -62,15 +58,69 @@ ${source}
   })()`;
 }
 
+function hardenPdfJsForObsidian(source) {
+  // PDF.js uses this helper only when its normal Web Worker cannot start and it
+  // falls back to injecting workerSrc as a page script. Mini Translator embeds
+  // the worker and supplies a Blob URL, so loading it through a script element
+  // is unnecessary and violates the Community Plugin security policy. Use the
+  // statically bundled worker module as the safe main-thread fallback instead.
+  const upstreamLoader = 'e.loadScript=function loadScript(t,e=!1){return new Promise(((i,s)=>{const n=document.createElement("script");n.src=t;n.onload=function(t){e&&n.remove();i(t)};n.onerror=function(){s(new Error(`Cannot load script at: ${n.src}`))};(document.head||document.documentElement).append(n)}))};';
+  const hardenedLoader = "e.loadScript=function loadScript(){loadPdfWorkerFallback();return Promise.resolve()};";
+  const occurrences = source.split(upstreamLoader).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(`PDF.js fake-worker loader changed upstream; expected 1 match, got ${occurrences}`);
+  }
+  let hardened = source.replace(upstreamLoader, hardenedLoader);
+  if (/document\.createElement\(["']script["']\)/.test(hardened)) {
+    throw new Error("PDF.js release input still creates script elements dynamically");
+  }
+
+  // The generic PDF.js browser bundle also carries three Node-only filesystem
+  // branches. Mini Translator always hands PDF.js an in-memory Uint8Array and
+  // runs in Obsidian's renderer, so those branches are neither needed nor
+  // appropriate in a Community Plugin release. Fail closed if an unexpected
+  // environment ever reaches one instead of granting arbitrary file access.
+  const nodeFsPattern = /require\(["']fs["']\)/g;
+  const nodeFsOccurrences = [...hardened.matchAll(nodeFsPattern)].length;
+  if (nodeFsOccurrences !== 3) {
+    throw new Error(
+      `PDF.js Node filesystem branches changed upstream; expected 3 matches, got ${nodeFsOccurrences}`
+    );
+  }
+  hardened = hardened.replace(nodeFsPattern, "disabledPdfNodeFs()");
+  if (/require\(["']fs["']\)/.test(hardened)) {
+    throw new Error("PDF.js release input still imports the Node filesystem module");
+  }
+  return `/* Mini Translator security changes: PDF.js script injection uses a bundled worker fallback; Node filesystem branches fail closed. */\n${hardened}`;
+}
+
 function buildRuntime() {
-  const pdf = read("vendor/pdfjs/pdf.min.js");
-  const worker = read("vendor/pdfjs/pdf.worker.js");
+  const pdf = hardenPdfJsForObsidian(read("scripts/vendor/pdfjs/pdf.min.js"));
+  const worker = read("scripts/vendor/pdfjs/pdf.worker.js");
   const orb = buildOrbModule();
   const i18n = buildCommonJsModule("src/i18n.js");
-  const workerChunks = worker.match(/[\s\S]{1,65536}/g) || [""];
   return `const BUNDLED_RUNTIME = (() => {
   let pdfjsLib = null;
   let orbModule = null;
+  let pdfWorkerModule = null;
+  const disabledPdfNodeFs = () => {
+    throw new Error("PDF.js Node filesystem access is disabled in Mini Translator");
+  };
+  const pdfWorkerBootstrap = (module, exports) => {
+${worker}
+  };
+  const loadPdfWorkerFallback = () => {
+    if (!pdfWorkerModule) {
+      const workerModule = { exports: {} };
+      pdfWorkerBootstrap(workerModule, workerModule.exports);
+      pdfWorkerModule = workerModule.exports;
+    }
+    globalThis.pdfjsWorker = pdfWorkerModule;
+    if (globalThis.window && typeof globalThis.window === "object") {
+      globalThis.window.pdfjsWorker = pdfWorkerModule;
+    }
+    return pdfWorkerModule;
+  };
   const loadPdfJs = () => {
     if (pdfjsLib) return pdfjsLib;
     const pdfModule = { exports: {} };
@@ -80,9 +130,8 @@ ${pdf}
     pdfjsLib = pdfModule.exports;
     return pdfjsLib;
   };
-  const getPdfWorkerSource = () => [
-${workerChunks.map((chunk) => `    ${jsString(chunk)}`).join(",\n")}
-  ].join("");
+  const getPdfWorkerSource = () =>
+    \`(\${pdfWorkerBootstrap.toString()})(undefined, undefined);\`;
   const loadOrbModule = () => {
     if (!orbModule) orbModule = ${orb};
     return orbModule;
@@ -149,6 +198,14 @@ function main() {
   process.stdout.write(smoke.stdout || "");
   process.stderr.write(smoke.stderr || "");
   if (smoke.status !== 0) throw new Error("发布运行时隔离测试失败");
+  const pdfIntegration = spawnSync(
+    process.execPath,
+    [path.join(__dirname, "test-pdf-runtime.js")],
+    { encoding: "utf8" }
+  );
+  process.stdout.write(pdfIntegration.stdout || "");
+  process.stderr.write(pdfIntegration.stderr || "");
+  if (pdfIntegration.status !== 0) throw new Error("PDF 发布运行时解析测试失败");
   console.log(`Mini Translator ${manifest.version} release assets built in ${dist}`);
   console.log(checksums);
 }
