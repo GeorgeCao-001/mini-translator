@@ -143,6 +143,6 @@ Copyright in third-party code remains with its respective copyright holders. See
 
 ## License
 
-Copyright (C) 2026 George.
+Copyright (C) 2026 GeorgeCao.
 
 Mini Translator is free software: you may redistribute it and/or modify it under the terms of the [GNU Affero General Public License, version 3 or (at your option) any later version](LICENSE) (`AGPL-3.0-or-later`). This program is distributed without any warranty; see the license for details.

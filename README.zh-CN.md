@@ -146,6 +146,6 @@ node scripts/build-release.js
 
 ## 开源许可
 
-Copyright (C) 2026 George.
+Copyright (C) 2026 GeorgeCao.
 
 Mini Translator 是自由软件：你可以依据 [GNU Affero 通用公共许可证第 3 版或任何后续版本](LICENSE)（`AGPL-3.0-or-later`）重新发布和/或修改本项目。本项目不提供任何担保；完整条款以 `LICENSE` 为准。

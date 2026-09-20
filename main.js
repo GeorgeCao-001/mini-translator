@@ -1,7 +1,7 @@
 /*
  * Mini Translator
  * SPDX-License-Identifier: AGPL-3.0-or-later
- * Copyright (C) 2026 George
+ * Copyright (C) 2026 GeorgeCao
  *
  * Portions of the translation-provider request logic were adapted from
  * Translate for Zotero by windingwind and contributors

@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "minAppVersion": "1.13.7",
   "description": "Translate selected text and PDFs with built-in services and OpenAI-compatible models.",
-  "author": "George",
+  "author": "GeorgeCao",
   "isDesktopOnly": true
 }
