@@ -1,5 +1,158 @@
 /* Mini Translator 面板样式 */
 
+/* 全文翻译笔记：限制舒适行长并给段落、分页标题和公式留出呼吸空间。
+   cssclasses frontmatter 只会把这些规则应用到插件生成的全文译文。 */
+.markdown-preview-view.mini-translator-full-translation .markdown-preview-sizer,
+.mini-translator-full-translation.markdown-preview-view .markdown-preview-sizer {
+  width: min(100%, 1040px);
+  max-width: 1040px;
+  margin-inline: auto;
+  padding-inline: clamp(18px, 4vw, 58px);
+  padding-bottom: 12vh;
+}
+
+.markdown-source-view.mod-cm6.mini-translator-full-translation .cm-contentContainer,
+.mini-translator-full-translation.markdown-source-view.mod-cm6 .cm-contentContainer {
+  width: min(100%, 1040px);
+  max-width: 1040px;
+  margin-inline: auto;
+}
+
+.markdown-source-view.mod-cm6.mini-translator-full-translation .cm-line,
+.mini-translator-full-translation.markdown-source-view.mod-cm6 .cm-line {
+  line-height: 1.78;
+}
+
+.markdown-source-view.mod-cm6.mini-translator-full-translation .cm-embed-block.math,
+.mini-translator-full-translation.markdown-source-view.mod-cm6 .cm-embed-block.math {
+  max-width: 100%;
+  overflow-x: auto;
+  padding-block: 0.7rem;
+}
+
+.markdown-preview-view.mini-translator-full-translation p,
+.mini-translator-full-translation.markdown-preview-view p,
+/* Obsidian 1.8+ 有些主题把 cssclasses 挂在 markdown-preview-section，
+   这里补上该挂载点，避免主题/版本变化导致段首缩进失效。 */
+.markdown-preview-section.mini-translator-full-translation p,
+.markdown-preview-view .markdown-preview-section.mini-translator-full-translation p,
+.mini-translator-full-translation .markdown-preview-section p {
+  margin-block: 0.9em 1.15em;
+  font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
+  font-size: clamp(16px, 0.55vw + 12px, 18px);
+  line-height: 1.92;
+  letter-spacing: 0.012em;
+  text-align: start;
+  text-indent: 2em !important;
+}
+
+/* 非中文全文按目标文字系统排版；生成文件会在 cssclasses 中写入 script class。 */
+.mini-translator-script-latin p,
+.mini-translator-script-cyrillic p,
+.mini-translator-script-greek p,
+.mini-translator-script-other p {
+  font-family: Georgia, "Times New Roman", "Noto Serif", serif !important;
+  letter-spacing: 0.006em;
+  text-indent: 1.35em !important;
+}
+
+.mini-translator-script-hangul p {
+  font-family: "Noto Serif KR", "Nanum Myeongjo", serif !important;
+  text-indent: 1em !important;
+}
+
+.mini-translator-script-indic p,
+.mini-translator-script-seasia p {
+  font-family: "Noto Serif", "Nirmala UI", "Leelawadee UI", serif !important;
+  line-height: 2;
+  text-indent: 1em !important;
+}
+
+.mini-translator-script-rtl p {
+  direction: rtl;
+  text-align: right;
+  font-family: "Noto Naskh Arabic", "Noto Sans Arabic", "Segoe UI", serif !important;
+  line-height: 2;
+  text-indent: 1.4em !important;
+}
+
+.markdown-preview-view.mini-translator-full-translation h1,
+.mini-translator-full-translation.markdown-preview-view h1 {
+  margin-block: 1.1em 1.35em;
+  line-height: 1.35;
+}
+
+.markdown-preview-view.mini-translator-full-translation h2,
+.mini-translator-full-translation.markdown-preview-view h2 {
+  margin-block: 3.4rem 1.35rem;
+  padding: 0.55rem 0 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--background-modifier-border);
+  border-left: 3px solid color-mix(in srgb, var(--interactive-accent) 48%, transparent);
+  color: var(--text-normal);
+  font-size: clamp(1.18rem, 0.7vw + 0.95rem, 1.48rem);
+}
+
+.markdown-preview-view.mini-translator-full-translation h1 + blockquote,
+.mini-translator-full-translation.markdown-preview-view h1 + blockquote {
+  margin-bottom: 2.6rem;
+  padding: 0.8rem 1rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-secondary) 72%, transparent);
+  color: var(--text-muted);
+}
+
+.markdown-preview-view.mini-translator-full-translation .math-block,
+.mini-translator-full-translation.markdown-preview-view .math-block,
+.markdown-preview-view.mini-translator-full-translation mjx-container[display="true"],
+.mini-translator-full-translation.markdown-preview-view mjx-container[display="true"] {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-block: 1.25rem !important;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-secondary) 76%, transparent);
+}
+
+.markdown-preview-view.mini-translator-full-translation .callout[data-callout="figure"],
+.mini-translator-full-translation.markdown-preview-view .callout[data-callout="figure"] {
+  --callout-color: 112, 126, 145;
+  margin-block: 1.6rem 2rem;
+  padding: 0.8rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--background-secondary) 78%, transparent);
+}
+
+.markdown-preview-view.mini-translator-full-translation .callout[data-callout="figure"] .callout-content,
+.mini-translator-full-translation.markdown-preview-view .callout[data-callout="figure"] .callout-content {
+  text-align: center;
+}
+
+.markdown-preview-view.mini-translator-full-translation .callout[data-callout="figure"] img,
+.mini-translator-full-translation.markdown-preview-view .callout[data-callout="figure"] img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 76vh;
+  margin: 0.7rem auto 0;
+  object-fit: contain;
+  border-radius: 5px;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 0.12);
+}
+
+@media (max-width: 720px) {
+  .markdown-preview-view.mini-translator-full-translation .markdown-preview-sizer,
+  .mini-translator-full-translation.markdown-preview-view .markdown-preview-sizer {
+    padding-inline: 14px;
+  }
+
+  .markdown-preview-view.mini-translator-full-translation p,
+  .mini-translator-full-translation.markdown-preview-view p {
+    font-size: 16px;
+    line-height: 1.84;
+  }
+}
+
 .mini-translator-panel {
   display: flex;
   flex-direction: column;
@@ -7,6 +160,52 @@
   padding: 14px 10px;
   height: 100%;
   overflow-y: auto;
+}
+
+.mini-language-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--background-secondary) 72%, transparent);
+}
+
+.mini-language-row .dropdown {
+  width: 100%;
+  min-width: 0;
+  font-size: var(--font-ui-small);
+}
+
+.mini-language-arrow {
+  color: var(--text-muted);
+  font-size: 0.95em;
+}
+
+.mini-language-notice {
+  display: none;
+  margin-top: -9px;
+  padding: 0 5px;
+  color: var(--text-faint);
+  font-size: var(--font-smallest);
+  line-height: 1.45;
+}
+
+.mini-language-notice.is-visible {
+  display: block;
+}
+
+.mini-language-settings-notice {
+  margin: 8px 0 14px;
+  padding: 9px 11px;
+  border-left: 3px solid var(--color-orange);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-orange) 9%, var(--background-secondary));
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.55;
 }
 
 .mini-panel-header {
@@ -128,6 +327,23 @@
   user-select: text;
 }
 
+.mini-source-line[data-script="cjk"] {
+  font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
+  text-align: start;
+}
+
+.mini-source-line[data-script="rtl"],
+.mini-target-line[data-script="rtl"] {
+  direction: rtl;
+  text-align: right;
+  font-family: "Noto Naskh Arabic", "Noto Sans Arabic", "Segoe UI", serif;
+  line-height: 1.95;
+}
+
+.mini-target-line[data-script="rtl"] {
+  text-indent: 1.4em;
+}
+
 /* 中文文本规范：段首缩进两字符；词典释义是条目式，不缩进；可光标选中复制 */
 .mini-zh-line {
   font-size: var(--font-text-size);
@@ -137,6 +353,27 @@
   text-indent: 2em;
   white-space: pre-wrap;
   user-select: text;
+}
+
+.mini-target-line[data-script="latin"],
+.mini-target-line[data-script="cyrillic"],
+.mini-target-line[data-script="greek"],
+.mini-target-line[data-script="other"] {
+  font-family: Georgia, "Times New Roman", "Noto Serif", serif;
+  text-indent: 1.35em;
+  letter-spacing: 0.006em;
+}
+
+.mini-target-line[data-script="hangul"] {
+  font-family: "Noto Serif KR", "Nanum Myeongjo", serif;
+  text-indent: 1em;
+}
+
+.mini-target-line[data-script="indic"],
+.mini-target-line[data-script="seasia"] {
+  font-family: "Noto Serif", "Nirmala UI", "Leelawadee UI", serif;
+  line-height: 1.95;
+  text-indent: 1em;
 }
 
 .mini-zh-pending {
@@ -505,6 +742,22 @@
 }
 .mini-prog-complete .mini-prog-fill {
   animation: mini-prog-complete-pulse 0.42s ease-in-out;
+}
+.mini-prog-error .mini-prog-dot {
+  background: var(--text-error, #d94c4c);
+  animation: none;
+}
+.mini-prog-error .mini-prog-fill {
+  background: var(--text-error, #d94c4c);
+  animation: none;
+}
+.mini-prog-error .mini-prog-fill::after {
+  animation: none;
+  opacity: 0;
+}
+.mini-prog-error .mini-prog-pct {
+  color: var(--text-error, #d94c4c);
+  font-weight: 600;
 }
 .mini-prog-meta {
   display: flex;

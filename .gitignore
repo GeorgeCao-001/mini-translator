@@ -1,0 +1,18 @@
+# Local plugin data may contain API keys, tokens, history, and user settings.
+data.json
+
+# Generated release assets. Rebuild with: node scripts/build-release.js
+dist/
+/dist.zip
+
+# Local/editor artifacts.
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+node_modules/
+coverage/
+
+# Local review snapshots may contain machine-specific paths or test-document details.
+REVIEW-*.md

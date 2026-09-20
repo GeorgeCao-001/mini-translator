@@ -1,91 +1,148 @@
 # Mini Translator
 
-Obsidian 零配置查词 + 翻译插件。灵感来自 Translate for Zotero：选中即译、弹窗在选区旁、双语对照面板、多引擎 + 自动回退。
+**English** | [简体中文](README.zh-CN.md)
 
-## 功能
+Mini Translator is a desktop-only Obsidian plugin for translating selected text, looking up English words, and translating academic PDFs. It works in Markdown editors, reading views, and PDF views, with a nearby popup and a bilingual sidebar. For full papers, an OpenAI-compatible model can generate readable Markdown and an optional source-page comparison HTML file.
 
-- **划词翻译**：Markdown 笔记、阅读视图和 PDF 里选中英文 → 快捷键 → 选区旁弹窗；弹窗锚定真实文字位置，默认在下方、下方越界才改到上方，译文回填时锁定这一侧并在框内滚动，不会随内容增长而“乱飞”或压住原文；初始尺寸按字数与显示区域自动协调，也可拖动右下角自由缩放。设置中的挡位（紧凑 `320×480`、标准 `420×720`、宽大 `560×900`、超大 `760×1120`）、显示区域自适应与自定义宽高控制自动打开尺寸，其中高度也限制手动伸展；手动宽度可超过挡位上限直到当前屏幕边界，并可选择记住上一次手动尺寸（翻译中弹窗外连续双击取消，译文输出后弹窗外单击关闭）
-- **两种模式**：
-  - 逐句翻译：多句选区逐句独立翻译，原文译文逐句对齐，带进度显示
-  - 整段翻译：整段一次请求，速度快、上下文完整（配合大模型质量最佳）
-- **划线停留自动翻译**：选中英文停留片刻（可调 0.5–5 秒）自动按整段模式翻译；翻译中单击不会取消，弹窗外连续双击或按 `Esc` 可取消，译文输出后弹窗外单击即可关闭；也可绑「切换划线自动翻译」快捷键随时开关
-- **查词**：单个英文单词走词典（音标 + 每词性一行 + 释义分号分隔）
-- **侧边栏面板**：翻译源下拉、词典源下拉、模型下拉、原文/译文双语对照、复制译文按钮；紧凑的「PDF 全文翻译」工具条提供「当前」和「选择…」（支持多选）两个入口
-- **排版规范**：所有翻译源发送前统一合并硬换行、断行连字符和软连字符，并与弹窗中显示的英文原文共用同一份排版结果；译文段首缩进两字符、段落自然重排、全角标点；英文衬线字体、两端对齐、弯引号、段落重排
-- **LaTeX 公式支持**：面板/弹窗用 MathJax 渲染公式。大模型源在翻译时自动把 PDF 文本层破坏的数学重建为 LaTeX（如 `x2`→`$x^2$`），与翻译同一次请求完成、不增加等待；选区里的 Unicode 数学子/上标字符（`𝑥`、`²`）会先无损还原为 `x`、`^2`。注意：免费源（有道/谷歌等）无法恢复残缺的公式——读公式密集的论文请用大模型源；已带完整 `$...$` 的文本任何源都能保护并渲染。命令面板提供「测试公式渲染」自检：四条固定公式渲染正常即说明管线无问题，剩余问题出在输入文本本身
-- **全文翻译 PDF（双轨输出，大模型源专用）**：命令「全文翻译当前 PDF」或「全文翻译：选择文件（可多选）」→ 确认后开跑，产出**两种互补的结果**：
-  - **原版式复刻 HTML**（`<文件名>·翻译.html`，自动在浏览器打开）：pdf.js 把每一页整体渲染成图片打底——**图表、插图、公式的像素 100% 原样保留**；中文译文按原文坐标用白色小块覆盖在精确位置上；顶部工具栏可切换「显示原文 / 编辑译文」，译文直接点击修改后「保存修改」写回文件（**纠错闭环**）；Ctrl+P 打印即得与原 PDF 版式一致的翻译版 PDF
-  - **Markdown 笔记**（`<文件名>·翻译.md`）：**纯中文译文**（双语对照选项已移除），残缺数学重建为可渲染 LaTeX；`\(...\)`/`\[...\]` 定界符自动归一为 Obsidian 可渲染的 `$`/`$$`，相邻公式粘连自动拆分；≤30 页时每页附可折叠原图 callout；轻量、可自由编辑
-  - **仅支持大模型源**：全部文本块（含公式密集块）都经大模型重建，免费源无法胜任——未配置/未选中大模型时会直接提示；HTML 中公式极密的块仍保留原像素不覆盖；跨页重复的页眉页脚自动剔除；逐块缓存，中断重跑秒回已翻部分
-- **可视化进度窗**：应用内弹窗，**标题栏可拖动**；✕ / ESC / 点击外部 = **最小化成右下角悬浮球**（淡金描边玻璃圆球 + 旋转流光/光晕呼吸动效 + 进度环，可拖动、方向键微调，翻译继续跑，最小化期间 Obsidian 完全可正常操作），点击悬浮球（位移 <5px）弹回完整进度窗；动态进度条带高光流动动画和百分比标签，平滑过渡；显示总进度条、当前阶段（提取→翻译→渲染→装配）、当前文件与批次、已完成块数、≈tokens 已用、ETA 剩余时间，一键取消
-- **悬浮球换肤**：设置里可选五款皮肤——ink-wash / galaxy / water-wave / amber-glow / frost-prism，浅深主题自动适配；拖动位置与所选皮肤自动记忆
-- **并行提速**：全文翻译按 8 块/批分组、3 路并发请求大模型 API，整体吞吐约为串行的 3 倍；逐块缓存不变，中断重跑秒回已翻部分
-- **批量多选（目录树）**：弹窗以**文件系统目录树**展示 vault 全部 PDF（只展开含 PDF 的分支，文件夹可折叠、支持文件夹级全选），搜索关键字时切换平铺模式；每勾选一个文件懒解析统计并在行内显示「N页 · M块 · ≈Xk tok」，底部汇总（已选数/token/请求数/预计耗时）随每次勾选实时重算
-- **缓存**：按「源 + 模型」缓存，换源换模型自动重新翻译
-- **翻译历史**：面板底部时钟小图标展开（不常驻）；每条记录时间 + 翻译源，文件名和 PDF 页码藏在条目的详情小图标里；点击回放到主显示区，单条可删、可一键清空，持久保存最近 50 条
-- **源状态统一广播**：面板、设置页、大模型管理弹窗三处对 翻译源 / 词典 / 模型 / 选中状态 的任何改动，落盘即通过统一中枢实时同步到所有界面——在弹窗里点模型芯片，背后打开的面板立刻跟随
+> [!IMPORTANT]
+> Chinese and English are the only language directions reviewed by the author. Other languages have only been exercised through AI and translation-API automation, without native-speaker review. Use those results as a reference, not as an authoritative translation.
 
-## 安装（任意机器）
+> [!NOTE]
+> The plugin interface includes English and Simplified Chinese. **Interface language** defaults to **Auto**, which follows Obsidian's language; it can also be selected explicitly in Mini Translator settings.
 
-1. 把本文件夹整体复制到目标 vault 的插件目录，形成：
-   ```
-   <你的 vault>/.obsidian/plugins/mini-translator/
-   ├── manifest.json
-   ├── main.js
-   ├── styles.css
-   └── lib/
-       ├── pdf.min.js
-       └── pdf.worker.js
-   ```
-   （`.obsidian` 是隐藏文件夹；没有 `plugins` 目录就新建一个）
-2. 重启 Obsidian（或 Ctrl+P → Reload app）
-3. 设置 → 第三方插件 → 启用 **Mini Translator**
-4. 设置 → 快捷键：建议「翻译选中文本（逐句）」绑 `Ctrl+Shift+T`、「翻译选中文本（整段）」绑 `Ctrl+Shift+G`、「切换划线自动翻译」绑 `Ctrl+Shift+A`
+## Highlights
 
-## 翻译源（句子）
+- **Selection translation** in Markdown, reading views, and PDFs. The popup stays near the real text selection, avoids covering it, and can be resized manually.
+- **Sentence and paragraph modes**. Sentence mode keeps bilingual alignment; paragraph mode preserves more context.
+- **Multilingual input and output**. Source language can be detected automatically, with more than 70 target-language options and layout handling for CJK and RTL scripts.
+- **Bilingual interface**. Settings, commands, popups, the sidebar, configuration dialogs, progress UI, notices, and generated comparison controls are available in English and Simplified Chinese.
+- **English word lookup** with pronunciation, parts of speech, and definitions.
+- **Bilingual sidebar** for language pairs, translation providers, dictionaries, models, history, and copying translated text.
+- **LaTeX-aware translation** that protects existing formulas. LLM providers can also attempt to reconstruct formulas damaged by a PDF text layer.
+- **Full-PDF translation** with heuristic single/two-column reading order, caption and footnote separation, cross-page continuation handling, and preservation of pages containing figures or tables.
+- **Controllable long-running tasks** with progress, cancellation, and a draggable floating orb when minimized.
 
-内置免费源（失败自动回退）：
+## Installation
 
-| 源 | 费用 | 说明 |
-|---|---|---|
-| 有道 | 免 Key | 国内直连，默认主源 |
-| 火山 | 免 Key | 响应快 |
-| 腾讯 | 免 Key | 交互翻译网页版 |
-| 谷歌 | 免 Key | 需代理，国内直连不通 |
+### Community Plugins directory
 
-**大模型源 = 配置即源**：每个大模型配置就是一个独立翻译源，保存后直接出现在翻译源下拉里，选中即用（失败不回退免费源）。
+After the plugin is listed:
 
-## 词典源（单词）
+1. Open **Settings → Community plugins**.
+2. Select **Browse**.
+3. Search for **Mini Translator**, then install and enable it.
 
-| 源 | 费用 | 说明 |
-|---|---|---|
-| 百度 | 免 Key | 简短中文释义，最稳 |
-| 有道词典 | 免 Key | 中文释义 + 音标 |
-| 牛津 | 免 Key | Oxford Learner's Dictionaries 英英释义，权威 |
+### Manual installation
 
-大模型配置同样可作为词典源（用该配置的模型 + 学术词典提示词）。分号全角化只对中文词典源生效，牛津保持英文标点。
+Download `main.js`, `manifest.json`, and `styles.css` from the same GitHub Release and place them in:
 
-## 大模型配置（OpenAI 兼容 API）
+```text
+<Vault>/.obsidian/plugins/mini-translator/
+```
 
-设置 → Mini Translator → 「大模型配置」→「管理配置」打开独立管理窗口：
+Reload Obsidian and enable the plugin. Do not mix files from different releases.
 
-- **内置预设**：DeepSeek、OpenAI、Kimi、通义千问、智谱 GLM、硅基流动、Ollama（本地），一键创建，自带默认模型列表
-- **一个配置 = 一个接口地址 + 一个 API Key + 多个模型**，模型共用 Key，可任意切换
-- **查询模型**：填好地址和 Key 后点击，自动从服务商 `/models` 端点拉取全部可用模型；查询期间按钮会锁定，完成后原位刷新配置页，不会重复追加表单或重复加入同名模型
-- **导入 / 导出**：全部配置（含 Key）可导出为 JSON，换机器一键导入
+## Quick start
 
-> 注意：配置和 API Key 存在 vault 本地 `.obsidian/plugins/mini-translator/data.json`，**不随本插件文件夹分发**——分享/提交本文件夹不会泄露你的 Key。
+1. Select the language icon in the left ribbon to open the Mini Translator sidebar.
+2. Choose a source-to-target language pair and a translation provider.
+3. Select text and run one of these commands:
+   - `Translate selected text (sentence by sentence)`
+   - `Translate selected text (paragraph)`
+4. Assign your own hotkeys under **Settings → Hotkeys**, or enable delayed automatic selection translation in the plugin settings.
 
-## 其他命令
+While a selection translation is pending, double-click outside the popup or press `Esc` to cancel. After translated text appears, a single outside click closes the popup.
 
-- **全文翻译当前 PDF** / **全文翻译：选择文件（可多选）**：见上文「全文翻译 PDF（双轨输出）」；扫描件无文本层会明确报错（OCR 支持规划中）。token 为估算值（约 3.5 字符 ≈ 1 token，含输入与输出）
-- **测试公式渲染**：渲染四条固定公式自检 MathJax 管线
-- **测试公式渲染**：渲染四条固定公式自检 MathJax 管线——若正常而划词不渲染，说明是输入文本不含完整 LaTeX，请用大模型源
-- **自检全部翻译源**：一键测试所有词典源/句子源（含大模型配置）在当前网络下的可用性
-- **诊断环境**：排查选区/坐标/PDF 结构问题
-- **打开翻译面板**：打开侧边栏面板
-- **切换划线自动翻译**：快捷键翻转自动翻译开关
+## Translation and dictionary providers
 
-## 致谢与许可
+### Built-in services
 
-引擎请求配方移植自 [windingwind/zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate)（AGPL-3.0）：youdao.ts / huoshanweb.ts / tencenttransmart.ts / google.ts（含 tk 算法）及 youdaodict 思路。PDF 内部结构参考 [RyotaUshio/obsidian-pdf-plus](https://github.com/RyotaUshio/obsidian-pdf-plus)。本插件同按 AGPL-3.0 分发。
+- Translation: Youdao, Volcengine, Tencent TranSmart, Google Translate, Bing Translator / Microsoft Translator, and CNKI Academic Translation.
+- English dictionaries: Baidu Translate, Youdao Dictionary, and Oxford Learner's Dictionaries.
+
+Some built-in providers use public web endpoints rather than guaranteed developer APIs. Availability may change because of region restrictions, rate limits, login requirements, CAPTCHA challenges, or provider-side changes. If a built-in translation provider fails, Mini Translator may try other compatible built-in providers, which means the same text can be sent to more than one service. User-configured LLM providers do not use that fallback chain.
+
+### OpenAI-compatible models
+
+You can configure an OpenAI-compatible Chat Completions endpoint. Templates are provided for DeepSeek, OpenAI, Kimi, Qwen, Zhipu GLM, SiliconFlow, and local Ollama. Templates only prefill endpoint and model information; they do not include accounts, credits, or API keys.
+
+New profiles are transactional: nothing is saved until you select **Create**. Selecting **Cancel**, closing the dialog, or switching configuration type discards the draft. Full-PDF translation requires an LLM profile and may incur provider charges.
+
+## Full-PDF translation
+
+Run either command:
+
+- `Translate the current PDF` — translate the active PDF
+- `Full-document translation: choose files` — select one or more PDFs
+
+Output is written next to the source PDF:
+
+- `<filename>·翻译.md`: a continuous reading version for Obsidian;
+- `<filename>·翻译.html`: an optional source-page/translation comparison view;
+- local page images for pages detected as containing figures or tables.
+
+### Limitations
+
+- Full translation requires an extractable PDF text layer. Scanned documents need OCR first.
+- The plugin does not recognize or translate text inside images, and it does not upload PDF page images to a vision model.
+- Reading order, footnotes, captions, line-break repair, and formula reconstruction are heuristic. Always verify complex layouts against the original PDF.
+- Full translation sends extracted text blocks to the selected LLM endpoint and may use many requests and tokens.
+- The optional comparison HTML loads MathJax from `cdn.jsdelivr.net` when opened. Disable HTML output if you do not want that extra formula-rendering request.
+- Translation is only offline when the selected endpoint is local, such as a local Ollama server.
+
+## Network, privacy, and local data
+
+Mini Translator has no author-operated proxy, analytics, or client-side telemetry. Obsidian sends requests directly to the selected service.
+
+| Operation | Data and possible destination |
+|---|---|
+| Built-in translation | Selected text and language parameters are sent to Youdao, Volcengine, Tencent, Google, Bing/Microsoft, or CNKI. Automatic fallback can send the same text to several compatible built-in services. |
+| Dictionary lookup | The queried word is sent to Baidu, Youdao, or Oxford. |
+| LLM translation | System instructions, source text, and language parameters are sent to the configured OpenAI-compatible endpoint. Its API key is used for authentication. |
+| Model discovery | A request is sent to the configured endpoint's `/models` route. |
+| Full-PDF translation | Extracted PDF text blocks are sent to the selected LLM endpoint. The original PDF and page images are not uploaded as vision input. |
+| Comparison HTML | The browser requests MathJax from jsDelivr when the generated HTML file is opened. |
+
+Settings, API keys, tokens, and up to 50 recent translation-history entries are stored **unencrypted** in:
+
+```text
+<Vault>/.obsidian/plugins/mini-translator/data.json
+```
+
+Vault sync or backup tools may copy this file. Never commit, publish, or share `data.json`. Exported configuration JSON also contains API keys and must be treated as sensitive. Credentials are not sent to the plugin author; they are used only when contacting the associated service endpoint.
+
+Before using any remote translation or model provider, review its privacy policy, terms, regional availability, and pricing. Do not send sensitive or restricted documents to a service you do not trust.
+
+## Compatibility
+
+- Obsidian desktop only.
+- Minimum Obsidian version: see `manifest.json`.
+- Built-in web endpoints depend on the provider and the user's network environment.
+
+## Development and release
+
+Run the complete offline release check:
+
+```bash
+node scripts/check-release.js
+```
+
+Build only the three Community Plugins release assets:
+
+```bash
+node scripts/build-release.js
+```
+
+See [tests/README.md](tests/README.md) for individual test suites and [docs/RELEASE.md](docs/RELEASE.md) for the release checklist and file classification. Public changes are recorded in [CHANGELOG.md](CHANGELOG.md); pre-release internal history is archived in [docs/PRE_RELEASE_HISTORY.md](docs/PRE_RELEASE_HISTORY.md).
+
+## Acknowledgements
+
+Parts of the translation-provider request logic were adapted from [Translate for Zotero](https://github.com/windingwind/zotero-pdf-translate), licensed under `AGPL-3.0-or-later`, and modified for Mini Translator in 2026. The PDF integration design was informed by [PDF++](https://github.com/RyotaUshio/obsidian-pdf-plus), licensed under the MIT License.
+
+Copyright in third-party code remains with its respective copyright holders. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution, modification notices, and license details.
+
+## License
+
+Copyright (C) 2026 George.
+
+Mini Translator is free software: you may redistribute it and/or modify it under the terms of the [GNU Affero General Public License, version 3 or (at your option) any later version](LICENSE) (`AGPL-3.0-or-later`). This program is distributed without any warranty; see the license for details.

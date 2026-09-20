@@ -204,6 +204,12 @@ class TranslationOrbController {
       ? requestedMargin
       : DEFAULT_MARGIN;
     this.onStateChange = typeof options.onStateChange === "function" ? options.onStateChange : null;
+    this.labels = {
+      host: "Translation progress orb. Drag to move; use the arrow keys to move and Home to reset its position.",
+      indeterminate: "Translation in progress; progress unknown",
+      progress: (value) => `Translation in progress: ${value}%`,
+      ...(options.labels || {})
+    };
     this.state = {
       visible: options.visible !== false,
       skin: options.skin || DEFAULT_SKIN_ID,
@@ -238,7 +244,7 @@ class TranslationOrbController {
     host.className = "translation-orb-host";
     host.tabIndex = 0;
     host.setAttribute("role", "group");
-    host.setAttribute("aria-label", "翻译进度悬浮球，可拖动；使用方向键移动，Home 重置位置");
+    host.setAttribute("aria-label", String(this.labels.host));
     host.setAttribute("aria-keyshortcuts", "ArrowUp ArrowDown ArrowLeft ArrowRight Home");
     this.orb = createOrbElement(this.document);
     host.append(this.orb);
@@ -288,7 +294,7 @@ class TranslationOrbController {
       if (this.orb) {
         this.orb.dataset.translationOrbState = "indeterminate";
         this.orb.removeAttribute("aria-valuenow");
-        this.orb.setAttribute("aria-label", "正在翻译，进度未知");
+        this.orb.setAttribute("aria-label", String(this.labels.indeterminate));
       }
     } else {
       const numeric = Number(value);
@@ -300,7 +306,10 @@ class TranslationOrbController {
         this.orb.dataset.translationOrbState = "determinate";
         this.orb.style.setProperty("--progress-offset", String(100 - progress));
         this.orb.setAttribute("aria-valuenow", String(progress));
-        this.orb.setAttribute("aria-label", `正在翻译，进度 ${Math.round(progress)}%`);
+        const progressLabel = typeof this.labels.progress === "function"
+          ? this.labels.progress(Math.round(progress))
+          : String(this.labels.progress).replace("{progress}", String(Math.round(progress)));
+        this.orb.setAttribute("aria-label", progressLabel);
       }
       if (progress >= 100 && previousProgress !== 100) this._pulseCompletion();
       else if (progress < 100) this._clearCompletionPulse();
