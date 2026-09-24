@@ -8,6 +8,7 @@ const vm = require("vm");
 
 let responseChoice;
 let requestCount = 0;
+let expectedAuthorization = "Bearer offline-test-only";
 const obsidian = {
   Plugin: class {}, ItemView: class {}, MarkdownView: class {},
   Modal: class {}, PluginSettingTab: class {}, Setting: class {},
@@ -15,7 +16,11 @@ const obsidian = {
   requestUrl: async (request) => {
     // Assert the mock is the only transport and all credentials are test-only.
     assert.equal(request.url, "https://example.invalid/v1/chat/completions");
-    assert.equal(request.headers.authorization, "Bearer offline-test-only");
+    if (expectedAuthorization) {
+      assert.equal(request.headers.authorization, expectedAuthorization);
+    } else {
+      assert.ok(!Object.prototype.hasOwnProperty.call(request.headers, "authorization"));
+    }
     assert.equal(JSON.parse(request.body).stream, false);
     requestCount++;
     return { status: 200, json: { choices: [responseChoice] } };
@@ -26,6 +31,9 @@ const sandbox = {
   require: (name) => {
     if (name === "obsidian") return obsidian;
     if (name === "./src/i18n.js") return require(path.join(__dirname, "..", "src", "i18n.js"));
+    if (name === "./src/model-config.js") return require(path.join(__dirname, "..", "src", "model-config.js"));
+    if (name === "./src/source-order.js") return require(path.join(__dirname, "..", "src", "source-order.js"));
+    if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
     throw new Error("Unexpected dependency in offline regression: " + name);
   },
 };
@@ -89,6 +97,22 @@ test("LLM: stop finish reason returns normal output", async () => {
 test("LLM: compatible API may omit finish_reason", async () => {
   responseChoice = { message: { content: "完整译文。" } };
   assert.equal(await callLlm(), "完整译文。");
+});
+test("LLM: keyless local endpoints do not receive an empty Bearer header", async () => {
+  responseChoice = { message: { content: "本地译文。" }, finish_reason: "stop" };
+  expectedAuthorization = "";
+  try {
+    assert.equal(
+      await X.llmRequest(
+        "The source text.",
+        { ...profile, apiKey: "" },
+        "Translate faithfully."
+      ),
+      "本地译文。"
+    );
+  } finally {
+    expectedAuthorization = "Bearer offline-test-only";
+  }
 });
 test("LLM: empty output remains an error", async () => {
   responseChoice = { message: { content: "   " }, finish_reason: "stop" };

@@ -27,11 +27,17 @@ function hashes() {
 
 run("Source syntax", process.execPath, ["--check", "main.js"]);
 run("Localization syntax", process.execPath, ["--check", "src/i18n.js"]);
+run("Model configuration syntax", process.execPath, ["--check", "src/model-config.js"]);
+run("Source ordering syntax", process.execPath, ["--check", "src/source-order.js"]);
+run("Draggable source picker syntax", process.execPath, ["--check", "src/source-picker.js"]);
 run("Build script syntax", process.execPath, ["--check", "scripts/build-release.js"]);
 run("Release test syntax", process.execPath, ["--check", "scripts/test-release.js"]);
 run("PDF runtime test syntax", process.execPath, ["--check", "scripts/test-pdf-runtime.js"]);
 run("Core tests", process.execPath, ["tests/core.test.js"]);
 run("Localization tests", process.execPath, ["tests/i18n.test.js"]);
+run("Model configuration tests", process.execPath, ["tests/model-config.test.js"]);
+run("Source ordering tests", process.execPath, ["tests/source-order.test.js"]);
+run("Source ordering integration tests", process.execPath, ["tests/source-order-integration.test.js"]);
 run("Configuration UI tests", process.execPath, ["tests/config-ui.test.js"]);
 run("Regression tests", process.execPath, ["tests/regressions.test.js"]);
 run("Release build", process.execPath, ["scripts/build-release.js"]);

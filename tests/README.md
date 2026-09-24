@@ -9,6 +9,9 @@ Run from the repository root:
 ```bash
 node tests/core.test.js
 node tests/i18n.test.js
+node tests/model-config.test.js
+node tests/source-order.test.js
+node tests/source-order-integration.test.js
 node tests/config-ui.test.js
 node tests/regressions.test.js
 ```
@@ -17,7 +20,10 @@ node tests/regressions.test.js
 |---|---|
 | `core.test.js` | Languages, formatting, batching, PDF layout reconstruction, popup placement, PDF.js loading, and orb loading |
 | `i18n.test.js` | Chinese/English catalog parity, placeholders, locale resolution, translated names, and every message key referenced by `main.js` |
-| `config-ui.test.js` | API configuration visibility, draft creation, validation, cancellation, retry, and duplicate prevention |
+| `model-config.test.js` | Model endpoint resolution, provider response parsing, authoritative list replacement, and one-time legacy migration |
+| `source-order.test.js` | Saved source-order normalization, fallback eligibility, primary-source precedence, and reordering boundaries |
+| `source-order-integration.test.js` | Offline doubles exercise the real sentence and dictionary fallback loops without provider network calls |
+| `config-ui.test.js` | API configuration visibility, draft creation, validation, cancellation, retry, duplicate prevention, draggable source picker controls, and one-row sidebar selector layout |
 | `regressions.test.js` | Truncated LLM responses, batch parsing, and cross-page continuation regressions |
 
 `regressions.test.js` optionally accepts another `main.js` snapshot:

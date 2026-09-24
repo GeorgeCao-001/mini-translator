@@ -166,6 +166,23 @@ if (
 ) {
   throw new Error("发布构建没有正确注入英文界面字典");
 }
+if (
+  runtime.modelConfig?.resolveModelsUrl(
+    "https://example.invalid/v1/chat/completions"
+  ) !== "https://example.invalid/v1/models" ||
+  runtime.modelConfig?.profilesFromStoredSettings({ llmProfiles: [] }, "Default").length !== 0
+) {
+  throw new Error("发布构建没有正确注入模型配置运行时");
+}
+if (
+  JSON.stringify(runtime.sourceOrder?.attemptOrder("B", ["C", "A", "B"], ["A", "C"], ["A", "B", "C"])) !==
+  JSON.stringify(["B", "C", "A"])
+) {
+  throw new Error("发布构建没有正确注入翻译源顺序运行时");
+}
+if (typeof runtime.sourcePicker?.createSourcePicker !== "function") {
+  throw new Error("发布构建没有正确注入可拖动翻译源下拉控件");
+}
 if (runtime.getPdfWorkerSource().length < 1_000_000) {
   throw new Error("发布构建中的 PDF worker 不完整");
 }

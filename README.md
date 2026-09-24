@@ -62,9 +62,13 @@ While a selection translation is pending, double-click outside the popup or pres
 
 Some built-in providers use public web endpoints rather than guaranteed developer APIs. Availability may change because of region restrictions, rate limits, login requirements, CAPTCHA challenges, or provider-side changes. If a built-in translation provider fails, Mini Translator may try other compatible built-in providers, which means the same text can be sent to more than one service. User-configured LLM providers do not use that fallback chain.
 
+Open the translation-source or dictionary-source picker in the sidebar or plugin settings, then **drag rows to reorder them**. The first row is the primary source; clicking a row also makes it primary. Built-in rows have a checkbox controlling whether they can be used as a fallback (the selected source is always tried). LLM profiles are primary-only and never silently fall back to another service. Unsupported built-in translation language pairs are skipped.
+
 ### OpenAI-compatible models
 
-You can configure an OpenAI-compatible Chat Completions endpoint. Templates are provided for DeepSeek, OpenAI, Kimi, Qwen, Zhipu GLM, SiliconFlow, and local Ollama. Templates only prefill endpoint and model information; they do not include accounts, credits, or API keys.
+You can configure an OpenAI-compatible Chat Completions endpoint. Templates are provided for DeepSeek, OpenAI, Google Gemini, xAI, Mistral AI, Groq, OpenRouter, Kimi, Qwen, Zhipu GLM, SiliconFlow, Ollama, LM Studio, and vLLM. Templates prefill only the endpoint; they intentionally do not freeze model names that can become obsolete.
+
+After entering the required API key, select **Fetch models from API** and choose one of the model IDs returned by that endpoint. A successful fetch replaces the profile's previous discovered list, so removed or stale preset names are not retained. If a compatible gateway does not expose `/models`, you can still add its documented model ID manually.
 
 New profiles are transactional: nothing is saved until you select **Create**. Selecting **Cancel**, closing the dialog, or switching configuration type discards the draft. Full-PDF translation requires an LLM profile and may incur provider charges.
 
@@ -99,7 +103,7 @@ Mini Translator has no author-operated proxy, analytics, or client-side telemetr
 | Built-in translation | Selected text and language parameters are sent to Youdao, Volcengine, Tencent, Google, Bing/Microsoft, or CNKI. Automatic fallback can send the same text to several compatible built-in services. |
 | Dictionary lookup | The queried word is sent to Baidu, Youdao, or Oxford. |
 | LLM translation | System instructions, source text, and language parameters are sent to the configured OpenAI-compatible endpoint. Its API key is used for authentication. |
-| Model discovery | A request is sent to the configured endpoint's `/models` route. |
+| Model discovery | A request is sent to the `/models` route derived from the configured endpoint; the returned IDs replace the profile's discovered model list. |
 | Full-PDF translation | Extracted PDF text blocks are sent to the selected LLM endpoint. The original PDF and page images are not uploaded as vision input. |
 | Comparison HTML | The browser requests MathJax from jsDelivr when the generated HTML file is opened. |
 

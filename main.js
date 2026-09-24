@@ -28,10 +28,17 @@ const {
   getLanguage,
 } = require("obsidian");
 
-// Release builds inject PDF.js, its worker, the translation orb, and i18n here.
+// Release builds inject PDF.js, its worker, the translation orb, i18n, and the
+// model-configuration helpers here.
 // The unbuilt entry point is for source-level tests, not direct Obsidian installation.
 const BUNDLED_RUNTIME = null;
 const I18N = BUNDLED_RUNTIME?.i18n || require("./src/i18n.js");
+const MODEL_CONFIG =
+  BUNDLED_RUNTIME?.modelConfig || require("./src/model-config.js");
+const SOURCE_ORDER =
+  BUNDLED_RUNTIME?.sourceOrder || require("./src/source-order.js");
+const SOURCE_PICKER =
+  BUNDLED_RUNTIME?.sourcePicker || require("./src/source-picker.js");
 const {
   normalizeUiLanguage,
   setUiLanguage,
@@ -41,6 +48,18 @@ const {
   providerName,
   phaseName,
 } = I18N;
+const {
+  extractModelIds,
+  profilesFromStoredSettings,
+  replaceFetchedModels,
+  resolveModelsUrl,
+} = MODEL_CONFIG;
+const {
+  attemptOrder,
+  normalizeEnabled,
+  normalizeOrder,
+} = SOURCE_ORDER;
+const { createSourcePicker, closeActiveSourcePicker } = SOURCE_PICKER;
 
 const WORD_RE = /^[a-zA-Z][a-zA-Z'’]*$/;
 const VIEW_TYPE = "mini-translator-view";
@@ -2009,10 +2028,12 @@ async function dictLookup(word, primary) {
     if (!prof.apiKey) throw new Error(t("config.api_key_required"));
     return { text: await llmRequest(word, prof, DICT_PROMPT), via: prof.name };
   }
-  const order = [
+  const order = attemptOrder(
     primary,
-    ...BUILTIN_DICTS.map((d) => d.name).filter((n) => n !== primary),
-  ];
+    PLUGIN_SETTINGS?.dictionarySourceOrder,
+    PLUGIN_SETTINGS?.dictionarySourceEnabled,
+    BUILTIN_DICTS.map((d) => d.name)
+  );
   for (const name of order) {
     const dict = BUILTIN_DICTS.find((d) => d.name === name);
     try {
@@ -2505,59 +2526,97 @@ function buildTranslatePrompt(from = "auto", to = "zh-Hans") {
 // 保留常量名供旧测试/热重载会话兼容；实际请求会按当前语言对动态构造。
 const TRANSLATE_PROMPT = buildTranslatePrompt("en", "zh-Hans");
 
-// ---------- 内置大模型预设（OpenAI 兼容端点；含默认模型列表，可再查询） ----------
+// ---------- 内置大模型预设（只预填端点；模型必须来自接口查询或用户手动输入） ----------
 const LLM_PRESETS = [
   {
     name: "DeepSeek",
     url: "https://api.deepseek.com/chat/completions",
-    models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    models: [],
   },
   {
     name: "OpenAI",
     url: "https://api.openai.com/v1/chat/completions",
-    models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
+    models: [],
+  },
+  {
+    name: "Google Gemini",
+    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    models: [],
+  },
+  {
+    name: "xAI",
+    url: "https://api.x.ai/v1/chat/completions",
+    models: [],
+  },
+  {
+    name: "Mistral AI",
+    url: "https://api.mistral.ai/v1/chat/completions",
+    models: [],
+  },
+  {
+    name: "Groq",
+    url: "https://api.groq.com/openai/v1/chat/completions",
+    models: [],
+  },
+  {
+    name: "OpenRouter",
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    models: [],
   },
   {
     name: "Kimi（月之暗面）",
     url: "https://api.moonshot.cn/v1/chat/completions",
-    models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    models: [],
   },
   {
     name: "通义千问",
     url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    models: ["qwen-plus", "qwen-max", "qwen-turbo"],
+    models: [],
   },
   {
     name: "智谱 GLM",
     url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    models: ["glm-4-flash", "glm-4-plus"],
+    models: [],
   },
   {
     name: "硅基流动",
     url: "https://api.siliconflow.cn/v1/chat/completions",
-    models: ["Qwen/Qwen2.5-7B-Instruct", "deepseek-ai/DeepSeek-V3"],
+    models: [],
   },
   {
     name: "Ollama（本地）",
     url: "http://localhost:11434/v1/chat/completions",
-    models: ["llama3.1", "qwen2.5", "mistral"],
+    models: [],
+  },
+  {
+    name: "LM Studio（本地）",
+    url: "http://localhost:1234/v1/chat/completions",
+    models: [],
+  },
+  {
+    name: "vLLM（本地）",
+    url: "http://localhost:8000/v1/chat/completions",
+    models: [],
   },
 ];
 
 // ---------- 模型自动查询：调 OpenAI 兼容的 /models 端点 ----------
 async function fetchModels(baseUrl, apiKey) {
-  let b = (baseUrl || "")
-    .replace(/\/chat\/completions\/?$/i, "")
-    .replace(/\/+$/, "");
-  if (!b) throw new Error(t("config.url_required"));
-  const headers = { "user-agent": UA };
+  if (!String(baseUrl || "").trim()) throw new Error(t("config.url_required"));
+  let modelsUrl;
+  try {
+    modelsUrl = resolveModelsUrl(baseUrl);
+  } catch (_error) {
+    throw new Error(t("config.invalid_endpoint"));
+  }
+  const headers = {
+    accept: "application/json",
+    "user-agent": UA,
+  };
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-  const res = await requestUrl({ url: b + "/models", headers });
+  const res = await requestUrl({ url: modelsUrl, headers });
   checkStatus(res, providerName("模型查询"));
-  const data = res.json;
-  const list = Array.isArray(data && data.data)
-    ? data.data.map((m) => m.id || m).filter(Boolean)
-    : [];
+  const list = extractModelIds(res.json);
   if (list.length === 0) throw new Error(t("error.models_empty"));
   return list;
 }
@@ -4508,7 +4567,7 @@ class LLMConfigModal extends Modal {
           url: pr.url,
           apiKey: "",
           models: [...pr.models],
-          activeModel: pr.models[0],
+          activeModel: pr.models[0] || "",
         };
       }
       // 选择预设仅创建内存草稿。只有表单中的「确定创建」才会写入 data.json；
@@ -4634,8 +4693,14 @@ class LLMConfigModal extends Modal {
       .setName(t("config.default_model"))
       .setDesc(t("config.default_model_desc"))
       .addDropdown((dd) => {
-        for (const m of p.models || []) dd.addOption(m, m);
-        dd.setValue(p.activeModel || (p.models && p.models[0]) || "");
+        const models = Array.isArray(p.models) ? p.models : [];
+        if (models.length === 0) {
+          dd.addOption("", t("config.no_models_option"));
+          dd.setValue("").setDisabled(true);
+        } else {
+          for (const m of models) dd.addOption(m, m);
+          dd.setValue(models.includes(p.activeModel) ? p.activeModel : models[0]);
+        }
         dd.onChange(async (v) => {
           p.activeModel = v;
           if (!creating) await this.plugin.saveData(this.plugin.settings);
@@ -4649,9 +4714,11 @@ class LLMConfigModal extends Modal {
           if (b.buttonEl) b.buttonEl.disabled = true;
           try {
             const list2 = await fetchModels(p.url, p.apiKey);
-            if (!Array.isArray(p.models)) p.models = [];
-            for (const m of list2) if (!p.models.includes(m)) p.models.push(m);
-            if (!p.activeModel) p.activeModel = p.models[0];
+            // A successful query is authoritative for this endpoint/key. Do
+            // not retain stale preset names or models no longer available to
+            // the account. Unlisted compatibility aliases can still be added
+            // manually afterwards.
+            replaceFetchedModels(p, list2);
             if (!creating) await this.plugin.saveData(this.plugin.settings);
             new Notice(t("config.models_received", { count: list2.length }), 2000);
           } catch (e) {
@@ -4880,13 +4947,14 @@ async function llmRequest(
 ) {
   const model = profile.activeModel || (profile.models && profile.models[0]);
   if (!model) throw new Error(t("config.no_model"));
+  const headers = { "content-type": "application/json" };
+  if (String(profile.apiKey || "").trim()) {
+    headers.authorization = `Bearer ${String(profile.apiKey).trim()}`;
+  }
   const res = await requestUrl({
     url: profile.url,
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${profile.apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       temperature: 0.3,
@@ -4940,6 +5008,24 @@ function engineOptions() {
   ];
 }
 
+function sourcePicker(parent, plugin, kind, onSelectionChange) {
+  return createSourcePicker({
+    parent,
+    plugin,
+    kind,
+    document,
+    getOptions: kind === "translation" ? engineOptions : dictOptions,
+    getBuiltins: () => (kind === "translation" ? ENGINES : BUILTIN_DICTS).map((item) => item.name),
+    providerName,
+    t,
+    order: SOURCE_ORDER,
+    onSelectionChange,
+    onError: (error) => new Notice(t("settings.source_order_save_failed", {
+      message: error?.message || String(error),
+    }), 5000),
+  });
+}
+
 async function translateSentence(
   text,
   primary,
@@ -4971,10 +5057,12 @@ async function translateSentence(
       detectedLanguage: from === "auto" ? inferLayoutLanguage(text) : from,
     };
   }
-  const order = [
+  const order = attemptOrder(
     primary,
-    ...ENGINES.map((e) => e.name).filter((n) => n !== primary),
-  ];
+    PLUGIN_SETTINGS?.translationSourceOrder,
+    PLUGIN_SETTINGS?.translationSourceEnabled,
+    ENGINES.map((e) => e.name)
+  );
   const errors = [];
   for (const name of order) {
     const engine = ENGINES.find((e) => e.name === name);
@@ -5072,35 +5160,18 @@ class MiniTranslatorView extends ItemView {
     this.refreshLanguageNotice();
 
     const header = this.contentEl.createDiv({ cls: "mini-panel-header" });
-    header.createSpan({ text: t("panel.provider"), cls: "mini-label" });
-    this.sourceDropdown = new DropdownComponent(header);
-    for (const eng of ENGINES) {
-      this.sourceDropdown.addOption(eng.name, providerName(eng.name));
-    }
-    this.sourceDropdown
-      .setValue(this.plugin.settings.primarySource)
-      .onChange(async (v) => {
-        this.plugin.settings.primarySource = v;
-        await this.plugin.saveData(this.plugin.settings);
-        this.updateModelRow();
-      });
+    const sourceControl = header.createDiv({ cls: "mini-panel-source-control" });
+    sourceControl.createSpan({ text: t("panel.provider"), cls: "mini-label" });
+    this.sourceDropdown = sourcePicker(sourceControl, this.plugin, "translation", () => this.updateModelRow());
     // 词典源下拉
-    header.createSpan({ text: t("panel.dictionary"), cls: "mini-label" });
-    this.dictDropdown = new DropdownComponent(header);
-    for (const d of dictOptions()) this.dictDropdown.addOption(d, providerName(d));
-    this.dictDropdown
-      .setValue(this.plugin.settings.dictSource)
-      .onChange(async (v) => {
-        this.plugin.settings.dictSource = v;
-        await this.plugin.saveData(this.plugin.settings);
-      });
-    // 模型选择行（仅当翻译源是某个大模型配置时显示）：列出该源的模型，选中即切换
-    this.modelRow = this.contentEl.createDiv();
+    const dictionaryControl = header.createDiv({ cls: "mini-panel-source-control" });
+    dictionaryControl.createSpan({ text: t("panel.dictionary"), cls: "mini-label" });
+    this.dictDropdown = sourcePicker(dictionaryControl, this.plugin, "dictionary");
+    // 模型选择与两个源共用表头，但由 CSS 排在下一行；仅大模型源显示。
+    this.modelRow = header.createDiv({ cls: "mini-panel-source-control mini-panel-model-control" });
     this.modelRow.style.display = "none";
-    this.modelRow.style.marginTop = "4px";
     this.modelRow.createSpan({ text: t("panel.model"), cls: "mini-label" });
     this.modelDropdown = new DropdownComponent(this.modelRow);
-    this.modelDropdown.selectEl.style.flex = "1";
     this.modelDropdown.onChange(async (v) => {
       const prof = findProfile(this.plugin.settings.primarySource);
       if (prof) {
@@ -5232,20 +5303,8 @@ class MiniTranslatorView extends ItemView {
   }
   // 每次同步重建选项，确保设置页/管理弹窗里的改动立即反映到面板
   syncSource() {
-    if (this.sourceDropdown) {
-      this.sourceDropdown.selectEl.empty();
-      for (const n of engineOptions()) {
-        this.sourceDropdown.addOption(n, providerName(n));
-      }
-      this.sourceDropdown.setValue(this.plugin.settings.primarySource);
-    }
-    if (this.dictDropdown) {
-      this.dictDropdown.selectEl.empty();
-      for (const d of dictOptions()) {
-        this.dictDropdown.addOption(d, providerName(d));
-      }
-      this.dictDropdown.setValue(this.plugin.settings.dictSource);
-    }
+    this.sourceDropdown?.sync();
+    this.dictDropdown?.sync();
     if (this.sourceLanguageDropdown) {
       this.sourceLanguageDropdown.setValue(this.plugin.settings.sourceLanguage);
     }
@@ -5353,6 +5412,8 @@ class MiniTranslatorView extends ItemView {
   }
   onClose() {
     // 面板关闭即退订，避免监听器堆积指向已销毁的 DOM
+    this.sourceDropdown?.close();
+    this.dictDropdown?.close();
     if (this.unsubSources) this.unsubSources();
     this.unsubSources = null;
   }
@@ -5365,20 +5426,17 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
     this.plugin = plugin;
     // 订阅中枢：面板/管理弹窗里改了源或选中状态，设置页的下拉立即跟随（实时）
     this.unsubSources = onSourcesSync(() => {
-      const s = plugin.settings;
-      const resync = (dd, val, options) => {
-        if (!dd) return;
-        dd.selectEl.empty();
-        for (const n of options) dd.addOption(n, providerName(n));
-        dd.setValue(val);
-      };
-      resync(this.ddPrimary, s.primarySource, engineOptions());
-      resync(this.ddDict, s.dictSource, dictOptions());
+      this.ddPrimary?.sync();
+      this.ddDict?.sync();
     });
   }
   display() {
     const { containerEl } = this;
+    this.ddPrimary?.close();
+    this.ddDict?.close();
     containerEl.empty();
+    this.ddPrimary = null;
+    this.ddDict = null;
 
     containerEl.createEl("h3", { text: t("settings.interface_heading") });
     new Setting(containerEl)
@@ -5455,31 +5513,15 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
     }
 
     containerEl.createEl("h3", { text: t("settings.providers_heading") });
-    new Setting(containerEl)
+    const primarySetting = new Setting(containerEl)
       .setName(t("settings.primary_provider"))
-      .setDesc(t("settings.primary_provider_desc"))
-      .addDropdown((dd) => {
-        this.ddPrimary = dd; // 挂到实例上，中枢同步时按最新引用重建
-        for (const n of engineOptions()) dd.addOption(n, providerName(n));
-        dd.setValue(this.plugin.settings.primarySource).onChange(async (v) => {
-          this.plugin.settings.primarySource = v;
-          await this.plugin.saveData(this.plugin.settings);
-          this.plugin.refreshPanel();
-        });
-      });
+      .setDesc(t("settings.primary_provider_desc"));
+    this.ddPrimary = sourcePicker(primarySetting.controlEl, this.plugin, "translation");
 
-    new Setting(containerEl)
+    const dictionarySetting = new Setting(containerEl)
       .setName(t("settings.dictionary_provider"))
-      .setDesc(t("settings.dictionary_provider_desc"))
-      .addDropdown((dd) => {
-        this.ddDict = dd;
-        for (const d of dictOptions()) dd.addOption(d, providerName(d));
-        dd.setValue(this.plugin.settings.dictSource).onChange(async (v) => {
-          this.plugin.settings.dictSource = v;
-          await this.plugin.saveData(this.plugin.settings);
-          this.plugin.refreshPanel();
-        });
-      });
+      .setDesc(t("settings.dictionary_provider_desc"));
+    this.ddDict = sourcePicker(dictionarySetting.controlEl, this.plugin, "dictionary");
 
     // ---------- 统一配置入口：大模型与可选内置源凭据按需展开 ----------
     containerEl.createEl("h3", { text: t("settings.service_config_heading") });
@@ -5843,11 +5885,16 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   async onload() {
+    const storedSettings = (await this.loadData()) || {};
     this.settings = Object.assign(
       {
         uiLanguage: "auto",
         primarySource: "有道",
         dictSource: "百度",
+        translationSourceOrder: null,
+        translationSourceEnabled: null,
+        dictionarySourceOrder: null,
+        dictionarySourceEnabled: null,
         sourceLanguage: "auto",
         targetLanguage: "zh-Hans",
         bingApiKey: "",
@@ -5870,7 +5917,7 @@ module.exports = class MiniTranslator extends Plugin {
         orbSize: 40, // 悬浮球直径（px），设置页可在 28–96 之间调整
         orbPosition: null, // 悬浮球拖动位置 {x,y}，null 用默认右下角
       },
-      await this.loadData()
+      storedSettings
     );
     this.settings.uiLanguage = normalizeUiLanguage(this.settings.uiLanguage);
     this.applyUiLanguage();
@@ -5906,37 +5953,14 @@ module.exports = class MiniTranslator extends Plugin {
     this.settings.popupLastSize = normalizeRememberedPopupSize(
       this.settings.popupLastSize
     );
-    // Migrate legacy llmUrl/llmApiKey/llmModel/customPresets fields to profile objects.
-    if (!Array.isArray(this.settings.llmProfiles) || this.settings.llmProfiles.length === 0) {
-      const profiles = [];
-      if (this.settings.llmUrl || this.settings.llmApiKey || this.settings.llmModel) {
-        profiles.push({
-          name: t("config.default_profile_name"),
-          url: this.settings.llmUrl || "",
-          apiKey: this.settings.llmApiKey || "",
-          models: this.settings.llmModel ? [this.settings.llmModel] : [],
-          activeModel: this.settings.llmModel || "",
-        });
-      }
-      for (const p of this.settings.customPresets || []) {
-        profiles.push({
-          name: p.name,
-          url: p.url || "",
-          apiKey: p.apiKey || "",
-          models: p.model ? [p.model] : [],
-          activeModel: p.model || "",
-        });
-      }
-      if (profiles.length === 0) {
-        profiles.push({
-          name: LLM_PRESETS[0].name,
-          url: LLM_PRESETS[0].url,
-          apiKey: "",
-          models: [...LLM_PRESETS[0].models],
-          activeModel: LLM_PRESETS[0].models[0],
-        });
-      }
-      this.settings.llmProfiles = profiles;
+    // Migrate the legacy single-profile fields only when the stored
+    // llmProfiles property is absent. An explicit [] means the user deleted
+    // every profile and must remain empty across restarts.
+    this.settings.llmProfiles = profilesFromStoredSettings(
+      storedSettings,
+      t("config.default_profile_name")
+    );
+    if (!Array.isArray(storedSettings.llmProfiles)) {
       this.settings.activeProfile = 0;
     }
     if (
@@ -5952,6 +5976,19 @@ module.exports = class MiniTranslator extends Plugin {
     if (this.settings.dictSource === "DeepSeek") {
       this.settings.dictSource = "大模型";
     }
+    const engineNames = ENGINES.map((source) => source.name);
+    const dictionaryNames = BUILTIN_DICTS.map((source) => source.name);
+    const modelNames = (this.settings.llmProfiles || []).map((profile) => profile.name);
+    this.settings.translationSourceOrder = normalizeOrder(
+      this.settings.translationSourceOrder,
+      [...engineNames, ...modelNames.filter((name) => !engineNames.includes(name))]
+    );
+    this.settings.translationSourceEnabled = normalizeEnabled(this.settings.translationSourceEnabled, engineNames);
+    this.settings.dictionarySourceOrder = normalizeOrder(
+      this.settings.dictionarySourceOrder,
+      [...dictionaryNames, ...modelNames.filter((name) => !dictionaryNames.includes(name))]
+    );
+    this.settings.dictionarySourceEnabled = normalizeEnabled(this.settings.dictionarySourceEnabled, dictionaryNames);
     await this.saveData(this.settings);
     PLUGIN_SETTINGS = this.settings;
 
@@ -6197,6 +6234,7 @@ module.exports = class MiniTranslator extends Plugin {
   onunload() {
     this.closePopup();
     this.cancelAutoTranslate();
+    closeActiveSourcePicker();
     SOURCE_SYNC_LISTENERS.clear(); // 禁用插件时清空中枢订阅
   }
 

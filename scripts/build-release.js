@@ -99,6 +99,9 @@ function buildRuntime() {
   const worker = read("scripts/vendor/pdfjs/pdf.worker.js");
   const orb = buildOrbModule();
   const i18n = buildCommonJsModule("src/i18n.js");
+  const modelConfig = buildCommonJsModule("src/model-config.js");
+  const sourceOrder = buildCommonJsModule("src/source-order.js");
+  const sourcePicker = buildCommonJsModule("src/source-picker.js");
   return `const BUNDLED_RUNTIME = (() => {
   let pdfjsLib = null;
   let orbModule = null;
@@ -137,7 +140,10 @@ ${pdf}
     return orbModule;
   };
   const i18n = ${i18n};
-  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n });
+  const modelConfig = ${modelConfig};
+  const sourceOrder = ${sourceOrder};
+  const sourcePicker = ${sourcePicker};
+  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, sourceOrder, sourcePicker });
 })();`;
 }
 

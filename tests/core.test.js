@@ -37,6 +37,12 @@ const src = fs.readFileSync(nodePath.join(PROJECT_ROOT, "main.js"), "utf8");
 const sourceRequire = (request) =>
   request === "./src/i18n.js"
     ? require(nodePath.join(PROJECT_ROOT, "src", "i18n.js"))
+    : request === "./src/model-config.js"
+      ? require(nodePath.join(PROJECT_ROOT, "src", "model-config.js"))
+    : request === "./src/source-order.js"
+      ? require(nodePath.join(PROJECT_ROOT, "src", "source-order.js"))
+    : request === "./src/source-picker.js"
+      ? require(nodePath.join(PROJECT_ROOT, "src", "source-picker.js"))
     : require(request);
 const sandbox = { window: {}, document: {}, console, Notice: class {}, require: sourceRequire, module: { exports: {} }, atob: (s) => Buffer.from(s, "base64").toString("binary"), btoa: (s) => Buffer.from(s, "binary").toString("base64") };
 vm.createContext(sandbox);
@@ -490,6 +496,12 @@ const sandbox2 = {
   require: (r) =>
     r === "./src/i18n.js"
       ? require(nodePath.join(PROJECT_ROOT, "src", "i18n.js"))
+      : r === "./src/model-config.js"
+        ? require(nodePath.join(PROJECT_ROOT, "src", "model-config.js"))
+      : r === "./src/source-order.js"
+        ? require(nodePath.join(PROJECT_ROOT, "src", "source-order.js"))
+      : r === "./src/source-picker.js"
+        ? require(nodePath.join(PROJECT_ROOT, "src", "source-picker.js"))
       : require(r),
 };
 vm.createContext(sandbox2);

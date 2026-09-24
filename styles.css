@@ -221,24 +221,198 @@
 
 .mini-panel-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  column-gap: 12px;
+  row-gap: 8px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
+.mini-panel-source-control {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .mini-panel-header .mini-label {
+  flex: none;
   font-size: var(--font-smaller);
   color: var(--text-muted);
   white-space: nowrap;
 }
 
-.mini-panel-header .dropdown {
+.mini-panel-source-control .dropdown {
+  flex: 0 1 auto;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-panel-model-control .dropdown {
+  max-width: 240px;
+}
+
+.mini-panel-model-control {
+  order: 2;
+  flex: 0 0 100%;
+}
+
+button.mini-source-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: fit-content;
+  min-width: 0;
+  max-width: 200px;
+  height: var(--input-height);
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--text-normal);
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.mini-panel-header .mini-panel-source-control button.mini-source-picker-trigger {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 160px;
+}
+
+.setting-item-control button.mini-source-picker-trigger,
+.mini-panel-header button.mini-source-picker-trigger,
+.setting-item-control button.mini-source-picker-trigger:hover,
+.mini-panel-header button.mini-source-picker-trigger:hover,
+.setting-item-control button.mini-source-picker-trigger:focus-visible,
+.mini-panel-header button.mini-source-picker-trigger:focus-visible,
+.setting-item-control button.mini-source-picker-trigger:active,
+.mini-panel-header button.mini-source-picker-trigger:active {
+  justify-content: flex-start;
+  text-align: left;
+  box-shadow: none;
+}
+
+button.mini-source-picker-trigger:hover,
+button.mini-source-picker-trigger[aria-expanded="true"] {
+  color: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+button.mini-source-picker-trigger:focus-visible {
+  text-decoration: underline;
+  outline: 0;
+}
+
+.mini-source-picker-panel {
+  position: fixed;
+  z-index: 9999;
+  width: max-content;
+  min-width: 180px;
+  max-width: min(260px, calc(100vw - 24px));
+  max-height: min(420px, calc(100vh - 24px));
+  overflow-y: auto;
+  padding: 6px;
+  text-align: left;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  border: 0;
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.mini-source-picker-heading {
+  padding: 6px 8px 9px;
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+}
+
+.mini-source-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+  cursor: grab;
+  user-select: none;
+}
+
+.mini-source-picker-row:hover,
+.mini-source-picker-row.is-drop-target {
+  background: var(--background-modifier-hover);
+}
+
+.mini-source-picker-row.is-dragging {
+  opacity: 0.45;
+}
+
+.mini-source-picker-grip {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 15px;
+  letter-spacing: -3px;
+}
+
+.mini-source-picker-panel .mini-source-picker-row button.mini-source-picker-choice {
+  display: block;
   flex: 1;
   min-width: 0;
+  padding: 3px 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  justify-content: flex-start;
+  color: var(--text-normal);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.mini-source-picker-panel .mini-source-picker-row button.mini-source-picker-choice:hover,
+.mini-source-picker-panel .mini-source-picker-row button.mini-source-picker-choice:focus-visible,
+.mini-source-picker-panel .mini-source-picker-row button.mini-source-picker-choice:active {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.mini-source-picker-panel .mini-source-picker-row button.mini-source-picker-choice.is-primary {
+  color: var(--interactive-accent);
+  font-weight: var(--font-semibold);
+}
+
+.mini-source-picker-enabled {
+  flex: none;
+  margin: 0 2px;
+  cursor: pointer;
+}
+
+.mini-source-picker-model-badge {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--font-smaller);
 }
 
 .mini-copy-btn {
+  order: 1;
+  flex: none;
+  align-self: center;
+  margin-left: auto;
   font-size: var(--font-smaller);
   color: var(--text-muted);
   background: var(--background-secondary);

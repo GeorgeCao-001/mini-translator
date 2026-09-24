@@ -2,6 +2,29 @@
 
 All public changes to Mini Translator are recorded here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [1.0.2] - 2026-09-24
+
+### Added
+
+- Added compact draggable translation/dictionary source pickers in the sidebar and settings. Dragging the first item changes the primary source; built-in fallback eligibility is controlled in the same picker. Model profiles remain primary-only.
+- Added endpoint-only templates for Google Gemini, xAI, Mistral AI, Groq, OpenRouter, LM Studio, and vLLM.
+- Added tested model-catalog parsing for OpenAI-compatible and common local-gateway response shapes.
+
+### Fixed
+
+- Stopped recreating an empty DeepSeek configuration after the user deletes every language-model profile.
+- Model discovery now replaces stale preset entries with the IDs actually returned by the configured `/models` endpoint and keeps the selected model only when it is still available.
+- Requests to keyless local endpoints no longer include an empty Bearer authorization header.
+
+### Changed
+
+- Made the draggable source pickers content-sized and left-aligned instead of stretching or opening a fixed-width menu; kept the original selector-button frame while removing extra option-list borders.
+- Kept sidebar labels beside their selectors, with translation and dictionary on the first row and the active model neatly aligned on a second row; retained the copy action.
+- Provider templates no longer embed model names that can become outdated; users fetch the current list from their provider or add a documented ID manually.
+- Clarified model selection in the configuration interface and expanded endpoint resolution to support base, Chat Completions, Responses, and explicit Models URLs.
+
 ## [1.0.1] - 2026-09-20
 
 ### Fixed

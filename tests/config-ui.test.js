@@ -8,6 +8,7 @@ const vm = require("vm");
 class Element {
   constructor(tag = "div", options = {}) {
     this.tagName = tag;
+    this.className = options.cls || "";
     this.children = [];
     this.text = options.text || "";
     this.type = options.type || "";
@@ -17,11 +18,19 @@ class Element {
     this.classList = { contains: () => false, add() {}, remove() {} };
   }
   empty() { this.children = []; this.text = ""; }
-  appendChild(child) { this.children.push(child); return child; }
+  replaceChildren(...children) { this.empty(); children.forEach((child) => this.appendChild(child)); }
+  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); }
+  contains(node) { return this === node || this.children.some((child) => child.contains(node)); }
+  setAttribute(name, value) { this[name] = value; }
+  getBoundingClientRect() { return { top: 0, bottom: 34, left: 0, width: 340, height: 34 }; }
   createEl(tag, options) { return this.appendChild(new Element(tag, options)); }
   createDiv(options) { return this.createEl("div", options); }
   createSpan(options) { return this.createEl("span", options); }
   addClass() {}
+  toggleClass() {}
+  hide() { this.style.display = "none"; }
+  show() { this.style.display = ""; }
   setText(text) { this.text = text; }
   addEventListener(name, handler) { this["on" + name] = handler; }
   focus() {}
@@ -44,6 +53,8 @@ class Control {
   onChange(callback) { this.change = callback; return this; }
   onClick(callback) { this.element.onclick = callback; return this; }
   setButtonText(text) { this.element.text = text; return this; }
+  setIcon(icon) { this.element.icon = icon; return this; }
+  setTooltip(text) { this.element.tooltip = text; return this; }
   setDisabled(value) { this.element.disabled = value; return this; }
   setCta() { return this; }
   setLimits() { return this; }
@@ -57,6 +68,7 @@ class Setting {
   constructor(parent) {
     this.settingEl = parent.createDiv();
     this.settingEl.setting = this;
+    this.controlEl = this.settingEl.createDiv();
     this.controls = [];
   }
   setName(name) { this.name = name; return this; }
@@ -74,6 +86,7 @@ class Setting {
   addButton(callback) { return this.add("button", callback); }
   addSlider(callback) { return this.add("input", callback); }
   addToggle(callback) { return this.add("input", callback); }
+  addExtraButton(callback) { return this.add("button", callback); }
 }
 const openedModals = [];
 class Modal {
@@ -90,6 +103,7 @@ const notices = [];
 const obsidian = {
   Plugin: class {}, ItemView: class {}, MarkdownView: class {},
   Modal, PluginSettingTab, Setting, DropdownComponent,
+  setIcon() {},
   Notice: class { constructor(message) { notices.push(message); } },
   requestUrl: async (request) => {
     assert.match(request.url, /^https:\/\/example\.invalid\/v1\/models$/);
@@ -103,6 +117,9 @@ const sandbox = {
   require: (name) => {
     if (name === "obsidian") return obsidian;
     if (name === "./src/i18n.js") return require(path.join(__dirname, "..", "src", "i18n.js"));
+    if (name === "./src/model-config.js") return require(path.join(__dirname, "..", "src", "model-config.js"));
+    if (name === "./src/source-order.js") return require(path.join(__dirname, "..", "src", "source-order.js"));
+    if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
     throw new Error("Unexpected dependency in offline UI test: " + name);
   },
   document: { body: new Element(), createElement: (tag) => new Element(tag) },
@@ -111,7 +128,8 @@ const sandbox = {
 vm.createContext(sandbox);
 const source = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
 vm.runInContext(source + `
-;__ui = { LLMConfigModal, MiniTranslatorSettingTab };
+;__ui = { LLMConfigModal, MiniTranslatorSettingTab, MiniTranslatorView, LLM_PRESETS,
+  setSettings: (settings) => { PLUGIN_SETTINGS = settings; } };
 // Settings previews are unrelated to this test; do not load the orb renderer.
 loadOrbModule = () => ({
   createDefaultSkinRegistry: () => ({
@@ -196,6 +214,32 @@ async function test(name, callback) {
     assert.deepEqual(Object.keys(field(modal.contentEl, "配置类型").options), ["llm", "bing", "cnki"]);
     assert.equal(field(modal.contentEl, "配置类型").element.value, "llm");
     assert.equal(nodes(modal.contentEl).filter((n) => n.type === "password").length, 0);
+    const presetOptions = Object.keys(creationPicker(modal.contentEl).options);
+    for (const provider of [
+      "p:DeepSeek", "p:Google Gemini", "p:xAI", "p:Mistral AI", "p:Groq",
+      "p:OpenRouter", "p:Ollama（本地）", "p:LM Studio（本地）", "p:vLLM（本地）",
+    ]) {
+      assert.ok(presetOptions.includes(provider), `Missing preset ${provider}`);
+    }
+    assert.deepEqual(
+      Array.from(sandbox.__ui.LLM_PRESETS, (preset) => `${preset.name}|${preset.url}`),
+      [
+        "DeepSeek|https://api.deepseek.com/chat/completions",
+        "OpenAI|https://api.openai.com/v1/chat/completions",
+        "Google Gemini|https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "xAI|https://api.x.ai/v1/chat/completions",
+        "Mistral AI|https://api.mistral.ai/v1/chat/completions",
+        "Groq|https://api.groq.com/openai/v1/chat/completions",
+        "OpenRouter|https://openrouter.ai/api/v1/chat/completions",
+        "Kimi（月之暗面）|https://api.moonshot.cn/v1/chat/completions",
+        "通义千问|https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        "智谱 GLM|https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        "硅基流动|https://api.siliconflow.cn/v1/chat/completions",
+        "Ollama（本地）|http://localhost:11434/v1/chat/completions",
+        "LM Studio（本地）|http://localhost:1234/v1/chat/completions",
+        "vLLM（本地）|http://localhost:8000/v1/chat/completions",
+      ]
+    );
     assert.equal(plugin.saves.length, 0);
   });
   await test("Bing selection shows only Bing fields and keeps stored values", async () => {
@@ -241,21 +285,23 @@ async function test(name, callback) {
   });
   await test("LLM editor retains its API key and repeated successful queries replace the form", async () => {
     await button(modal.contentEl, "编辑").click();
-    const names = ["配置类型", "配置名称", "接口地址", "API Key", "默认模型", "添加模型"];
+    const names = ["配置类型", "配置名称", "接口地址", "API Key", "选择模型", "添加模型"];
     expectFields(modal.contentEl, names);
     assert.equal(field(modal.contentEl, "API Key").element.value, "existing-llm-key");
     assert.equal(field(modal.contentEl, "API Key").element.type, "password");
     for (let i = 0; i < 3; i++) {
-      await button(modal.contentEl, "查询模型").click();
+      await button(modal.contentEl, "从接口获取模型").click();
       expectFields(modal.contentEl, names);
     }
     assert.equal(requests, 3);
     assert.equal(JSON.stringify(plugin.settings.llmProfiles[0].models), '["model-a","model-b"]');
+    await field(modal.contentEl, "选择模型").choose("model-b");
+    assert.equal(plugin.settings.llmProfiles[0].activeModel, "model-b");
     assert.equal(plugin.settings.primarySource, "Existing LLM");
   });
   await test("failed model query restores one form and can return to list", async () => {
     failModelRequest = true;
-    await button(modal.contentEl, "查询模型").click();
+    await button(modal.contentEl, "从接口获取模型").click();
     assert.equal(modal._modelQuerying, false);
     assert.equal(settings(modal.contentEl).length, 6);
     assert.ok(notices.some((notice) => notice.includes("查询失败")));
@@ -284,6 +330,80 @@ async function test(name, callback) {
     assert.equal(settings(tab.containerEl).length, names.length);
     tab.unsubSources?.();
   });
+  await test("source dropdowns drag to reorder without adding separate settings rows", async () => {
+    const sourcePlugin = pluginFixture();
+    sourcePlugin.settings.primarySource = "有道";
+    sourcePlugin.settings.dictSource = "百度";
+    sandbox.__ui.setSettings(sourcePlugin.settings);
+    const tab = new sandbox.__ui.MiniTranslatorSettingTab({}, sourcePlugin);
+    tab.display();
+    assert.ok(!settings(tab.containerEl).some((row) => /备用.*顺序/.test(row.name)));
+    const rows = (picker) => nodes(picker.panelEl).filter((node) => node.dataset.sourceName);
+    const names = (picker) => rows(picker).map((row) => row.dataset.sourceName);
+    const drag = async (picker, from, target, clientY) => {
+      const source = rows(picker).find((row) => row.dataset.sourceName === from);
+      const destination = rows(picker).find((row) => row.dataset.sourceName === target);
+      source.ondragstart({ dataTransfer: { setData() {} } });
+      await destination.ondrop({ preventDefault() {}, clientY });
+    };
+    tab.ddPrimary.open();
+    assert.deepEqual(names(tab.ddPrimary).slice(0, 3), ["有道", "火山", "腾讯"]);
+    await drag(tab.ddPrimary, "火山", "腾讯", 30);
+    assert.deepEqual(names(tab.ddPrimary).slice(0, 3), ["有道", "腾讯", "火山"]);
+    assert.deepEqual(Array.from(sourcePlugin.settings.translationSourceOrder).slice(0, 3), ["有道", "腾讯", "火山"]);
+    const tencentToggle = rows(tab.ddPrimary).find((row) => row.dataset.sourceName === "腾讯")
+      .children.find((child) => child.tagName === "input");
+    tencentToggle.checked = false;
+    await tencentToggle.onchange();
+    assert.ok(!sourcePlugin.settings.translationSourceEnabled.includes("腾讯"));
+    assert.equal(sourcePlugin.settings.primarySource, "有道");
+    tab.ddDict.open();
+    await drag(tab.ddDict, "牛津", "有道词典", 0);
+    assert.deepEqual(names(tab.ddDict), ["百度", "牛津", "有道词典", "Existing LLM"]);
+    await drag(tab.ddDict, "牛津", "百度", 0);
+    assert.equal(sourcePlugin.settings.dictSource, "牛津", "Dragging to the top selects the new primary");
+    assert.deepEqual(Array.from(sourcePlugin.settings.dictionarySourceOrder).slice(0, 3), ["牛津", "百度", "有道词典"]);
+    tab.ddPrimary.open();
+    await drag(tab.ddPrimary, "Existing LLM", "有道", 0);
+    assert.equal(sourcePlugin.settings.primarySource, "Existing LLM", "Model rows can be dragged into the primary slot");
+    await tab.ddPrimary.choose("有道");
+    const restartedPlugin = pluginFixture();
+    restartedPlugin.settings = JSON.parse(JSON.stringify(sourcePlugin.saves[sourcePlugin.saves.length - 1]));
+    sandbox.__ui.setSettings(restartedPlugin.settings);
+    const restartedTab = new sandbox.__ui.MiniTranslatorSettingTab({}, restartedPlugin);
+    restartedTab.display();
+    restartedTab.ddPrimary.open();
+    assert.deepEqual(names(restartedTab.ddPrimary).slice(0, 4), ["有道", "Existing LLM", "腾讯", "火山"]);
+    assert.equal(rows(restartedTab.ddPrimary).find((row) => row.dataset.sourceName === "腾讯")
+      .children.find((child) => child.tagName === "input").checked, false);
+    restartedTab.ddDict.open();
+    assert.deepEqual(names(restartedTab.ddDict).slice(0, 3), ["牛津", "百度", "有道词典"]);
+    restartedTab.ddDict.close();
+    restartedTab.unsubSources?.();
+    assert.ok(sourcePlugin.saves.length >= 4);
+    tab.unsubSources?.();
+    sandbox.__ui.setSettings(null);
+  });
+  await test("sidebar keeps source controls in one header with the model on a separate visual row", async () => {
+    const panelPlugin = pluginFixture();
+    sandbox.__ui.setSettings(panelPlugin.settings);
+    const view = new sandbox.__ui.MiniTranslatorView({}, panelPlugin);
+    view.contentEl = new Element();
+    view.app = {};
+    await view.onOpen();
+    const header = view.modelRow.parentNode;
+    assert.equal(header.className, "mini-panel-header");
+    assert.equal(view.sourceDropdown.buttonEl.parentNode.parentNode, header);
+    assert.equal(view.dictDropdown.buttonEl.parentNode.parentNode, header);
+    assert.equal(header.children.filter((child) => child.className.includes("mini-panel-source-control")).length, 3);
+    assert.equal(view.modelRow.style.display, "");
+    assert.equal(view.copyBtn.parentNode, header, "Existing copy action must remain available");
+    panelPlugin.settings.primarySource = "有道";
+    view.updateModelRow();
+    assert.equal(view.modelRow.style.display, "none");
+    view.onClose();
+    sandbox.__ui.setSettings(null);
+  });
   await test("choosing either a preset or blank configuration opens an unsaved draft", async () => {
     for (const choosePreset of [true, false]) {
       const draftPlugin = pluginFixture();
@@ -294,9 +414,14 @@ async function test(name, callback) {
       const preset = Object.keys(picker.options).find((value) => value.startsWith("p:"));
       assert.ok(preset, "At least one built-in LLM preset is available");
       await enterDraft(draftModal, choosePreset ? preset : "blank");
+      assert.deepEqual(
+        Array.from(draftModal.draft.models),
+        [],
+        "Presets must not inject model names that can become stale"
+      );
 
       expectFields(draftModal.contentEl, [
-        "配置类型", "配置名称", "接口地址", "API Key", "默认模型", "添加模型",
+        "配置类型", "配置名称", "接口地址", "API Key", "选择模型", "添加模型",
       ]);
       button(draftModal.contentEl, "取消");
       button(draftModal.contentEl, "确定创建");
@@ -324,10 +449,11 @@ async function test(name, callback) {
     assert.equal(draftPlugin.saves.length, 0);
 
     const beforeRequests = requests;
-    await button(draftModal.contentEl, "查询模型").click();
+    await button(draftModal.contentEl, "从接口获取模型").click();
     assert.equal(requests, beforeRequests + 1);
     assert.ok(draftModal.draft.models.includes("model-a"));
     assert.ok(draftModal.draft.models.includes("model-b"));
+    assert.ok(!draftModal.draft.models.includes("local-model"), "A successful API query replaces stale/manual draft entries");
     assert.deepEqual(profilesSnapshot(draftPlugin), before);
     assert.equal(draftPlugin.saves.length, 0);
 

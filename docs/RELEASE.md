@@ -3,9 +3,9 @@
 ## 公开版本
 
 - 首个公开版本：`1.0.0`
-- 当前公开版本：`1.0.1`
+- 本次版本：`1.0.2`
 - 首发最低 Obsidian 版本：`1.13.7`（本机实际验证版本）
-- GitHub Release tag 必须与 `manifest.json` 完全一致：`1.0.1`
+- GitHub Release tag 必须与 `manifest.json` 完全一致：`1.0.2`
 - 不要使用 `v1.0`、`v1.0.0` 或两段式版本号
 - `versions.json` 记录插件版本与最低 Obsidian 版本的对应关系
 
@@ -81,8 +81,8 @@ node scripts/check-release.js
 然后确认：
 
 1. `manifest.json` 与 `versions.json` 都是有效 JSON。
-2. 根目录 `manifest.json` 和 Release 附件的版本均为 `1.0.1`。
-3. Release tag 精确为 `1.0.1`。
+2. 根目录 `manifest.json` 和 Release 附件的版本均为 `1.0.2`。
+3. Release tag 精确为 `1.0.2`。
 4. Release 页面包含三个独立附件，而不只是 GitHub 自动生成的源码压缩包。
 5. README 已披露联网服务、明文凭据存储、自动回退和 HTML MathJax CDN。
 6. 从一个空白测试 Vault 仅用三个 Release 附件安装并验证划词、侧边栏、悬浮球与 PDF 全文翻译。
