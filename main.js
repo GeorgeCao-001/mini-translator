@@ -6203,6 +6203,9 @@ module.exports = class MiniTranslator extends Plugin {
     // 翻译完成后：弹窗外单击即可关闭；此时双击也只关闭，不显示取消提示。
     this.registerDomEvent(document, "dblclick", (e) => {
       if (this.popupEl && this.popupEl.contains(e.target)) return;
+      // Double-click also selects a word; do not cancel its translation.
+      const selection = e.target?.ownerDocument?.defaultView?.getSelection();
+      if (selection && selection.toString().trim()) return;
       const popupTranslating = !!this.popupEl && !this._popupTranslationDone;
       const hadPending = this.cancelAutoTranslate();
       const hadPopup = !!this.popupEl;
