@@ -46,6 +46,43 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
+// Exercise the registered double-click handler without loading a real vault.
+const doubleClickStart = source.indexOf('this.registerDomEvent(document, "dblclick", (e) => {');
+assert.ok(doubleClickStart >= 0);
+const doubleClickBody = source.slice(doubleClickStart).split('(e) => {')[1].split('\n    });')[0];
+const doubleClick = new Function('e', 'Notice', 't', doubleClickBody);
+function doubleClickResult(text, { popup = false, done = false, inside = false } = {}) {
+  const calls = { cancelled: 0, closed: 0, notices: 0 };
+  const plugin = {
+    popupEl: popup ? { contains: () => inside } : null,
+    _popupTranslationDone: done,
+    cancelAutoTranslate() { calls.cancelled++; return true; },
+    closePopup() { calls.closed++; },
+  };
+  const event = { target: { ownerDocument: { defaultView: {
+    getSelection: () => ({ toString: () => text }),
+  } } } };
+  doubleClick.call(plugin, event, function () { calls.notices++; }, key => key);
+  return calls;
+}
+test('selection: double-clicking a word preserves pending and in-flight translation', () => {
+  for (const popup of [false, true]) {
+    assert.deepEqual(doubleClickResult('trajectory', { popup }), { cancelled: 0, closed: 0, notices: 0 });
+  }
+});
+test('selection: blank-area double-click still cancels pending translation', () => {
+  assert.deepEqual(doubleClickResult('  '), { cancelled: 1, closed: 0, notices: 1 });
+});
+test('selection: blank-area double-click closes an in-flight popup', () => {
+  assert.deepEqual(doubleClickResult('', { popup: true }), { cancelled: 1, closed: 1, notices: 1 });
+});
+test('selection: completed popup closes without a cancellation notice', () => {
+  assert.deepEqual(doubleClickResult('', { popup: true, done: true }), { cancelled: 1, closed: 1, notices: 0 });
+});
+test('selection: double-click inside the popup leaves it intact', () => {
+  assert.deepEqual(doubleClickResult('', { popup: true, inside: true }), { cancelled: 0, closed: 0, notices: 0 });
+});
+
 // Batch protocol: unmarked commentary is never a replacement for a missing block.
 test("batch: preamble cannot fill a missing TGT", () => {
   assert.throws(
