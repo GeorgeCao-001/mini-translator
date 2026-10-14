@@ -16,6 +16,7 @@ const {
   Notice,
   requestUrl,
   MarkdownView,
+  Menu,
   ItemView,
   PluginSettingTab,
   Setting,
@@ -39,6 +40,10 @@ const SOURCE_ORDER =
   BUNDLED_RUNTIME?.sourceOrder || require("./src/source-order.js");
 const SOURCE_PICKER =
   BUNDLED_RUNTIME?.sourcePicker || require("./src/source-picker.js");
+const SELECTION_MENU =
+  BUNDLED_RUNTIME?.selectionMenu || require("./src/selection-menu.js");
+const POPUP_FONT =
+  BUNDLED_RUNTIME?.popupFont || require("./src/popup-font.js");
 const {
   normalizeUiLanguage,
   setUiLanguage,
@@ -60,6 +65,9 @@ const {
   normalizeOrder,
 } = SOURCE_ORDER;
 const { createSourcePicker, closeActiveSourcePicker } = SOURCE_PICKER;
+const { registerSelectionTranslationMenu } = SELECTION_MENU;
+const { normalizePopupFontSize, normalizePopupFontScale, resizePopupFontScale,
+  readPopupResizeSize, popupFontStyles, addPopupFontSettings } = POPUP_FONT;
 
 const WORD_RE = /^[a-zA-Z][a-zA-Z'’]*$/;
 const VIEW_TYPE = "mini-translator-view";
@@ -5643,6 +5651,9 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
         { lock: true }
       );
     };
+    addPopupFontSettings(containerEl, {
+      Setting, plugin: this.plugin, t, refreshPopup: refreshOpenPopupLimits,
+    });
     let setCustomSizeVisibility = () => {};
     new Setting(containerEl)
       .setName(t("settings.popup_limit"))
@@ -5752,6 +5763,7 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
           .setDisabled(!rememberedPopupSize)
           .onClick(async () => {
             this.plugin.settings.popupLastSize = null;
+            this.plugin.settings.popupLastFontScale = 1;
             await this.plugin.saveData(this.plugin.settings);
             this.display();
           })
@@ -5909,6 +5921,10 @@ module.exports = class MiniTranslator extends Plugin {
         popupCustomMaxHeight: POPUP_CUSTOM_HEIGHT_DEFAULT_PX,
         rememberPopupSize: false,
         popupLastSize: null,
+        popupSourceFontSize: 0, // 0 = follow Obsidian; custom values in px
+        popupTargetFontSize: 0,
+        popupFontFollowResize: false,
+        popupLastFontScale: 1,
         fullHtml: false, // 原文对照 HTML：默认关（Markdown 折叠保留含图原页）
         history: [],
         llmProfiles: [],
@@ -5950,6 +5966,10 @@ module.exports = class MiniTranslator extends Plugin {
       POPUP_CUSTOM_HEIGHT_MAX_PX
     );
     this.settings.rememberPopupSize = !!this.settings.rememberPopupSize;
+    this.settings.popupSourceFontSize = normalizePopupFontSize(this.settings.popupSourceFontSize);
+    this.settings.popupTargetFontSize = normalizePopupFontSize(this.settings.popupTargetFontSize);
+    this.settings.popupFontFollowResize = !!this.settings.popupFontFollowResize;
+    this.settings.popupLastFontScale = normalizePopupFontScale(this.settings.popupLastFontScale);
     this.settings.popupLastSize = normalizeRememberedPopupSize(
       this.settings.popupLastSize
     );
@@ -6048,6 +6068,8 @@ module.exports = class MiniTranslator extends Plugin {
       id: "translate-selection-paragraph",
       callback: () => this.translateSelection("paragraph"),
     });
+
+    registerSelectionTranslationMenu(this, { Menu, document, t });
 
     this.addLocalizedCommand("command.open_panel", {
       id: "open-panel",
@@ -6501,6 +6523,7 @@ module.exports = class MiniTranslator extends Plugin {
       const maxTop = Math.max(margin, vh - rect.height - margin);
       el.style.left = `${Math.min(maxLeft, Math.max(margin, Number.isFinite(currentLeft) ? currentLeft : rect.left))}px`;
       el.style.top = `${Math.min(maxTop, Math.max(margin, Number.isFinite(currentTop) ? currentTop : rect.top))}px`;
+      this._capturePopupFontBaseline(el);
       return;
     }
     const gap = 8;
@@ -6594,6 +6617,7 @@ module.exports = class MiniTranslator extends Plugin {
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
     el.dataset.placement = placement;
+    this._capturePopupFontBaseline(el);
   }
 
   _popupContentLength() {
@@ -6640,6 +6664,14 @@ module.exports = class MiniTranslator extends Plugin {
       "--mini-popup-small-text-boost",
       `${metrics.smallTextBoost}px`
     );
+    const font = popupFontStyles(this.settings, {
+      scale: this._popupFontScale,
+      textBoost: metrics.textBoost,
+      smallTextBoost: metrics.smallTextBoost,
+    });
+    el.style.setProperty?.("--mini-popup-source-font-size", font.source);
+    el.style.setProperty?.("--mini-popup-target-font-size", font.target);
+    el.dataset.fontScale = String(font.scale);
     if (this.popupBodyEl && el.contains(this.popupBodyEl)) {
       this.popupBodyEl.style.maxHeight = `${
         this._popupUserResized
@@ -6650,6 +6682,30 @@ module.exports = class MiniTranslator extends Plugin {
     el.dataset.contentChars = String(chars);
     el.dataset.displayScale = metrics.displayScale.toFixed(3);
     el.dataset.maxSize = metrics.sizeMode;
+  }
+
+  _capturePopupFontBaseline(el) {
+    if (this._popupResizeActive || this._popupFontResizeBase) return;
+    const signature = `${el.style.width || ""}|${el.style.height || ""}`;
+    // A native resize may already have changed inline dimensions before its
+    // observer callback. Do not overwrite the previous size with the new one.
+    if (this._popupObservedInlineSize != null && signature !== this._popupObservedInlineSize) return;
+    this._popupFontLastSize = readPopupResizeSize(el);
+  }
+
+  _updatePopupFontScale(el) {
+    if (!this.settings?.popupFontFollowResize) return;
+    if (!this._popupFontResizeBase) {
+      this._popupFontResizeBase = {
+        size: this._popupFontLastSize || readPopupResizeSize(el),
+        scale: normalizePopupFontScale(this._popupFontScale),
+      };
+    }
+    this._popupFontScale = resizePopupFontScale(
+      this._popupFontResizeBase.size,
+      readPopupResizeSize(el),
+      this._popupFontResizeBase.scale
+    );
   }
 
   _rememberCurrentPopupSize(el) {
@@ -6675,16 +6731,20 @@ module.exports = class MiniTranslator extends Plugin {
     const previous = normalizeRememberedPopupSize(
       this.settings.popupLastSize
     );
+    const fontScale = this.settings.popupFontFollowResize
+      ? normalizePopupFontScale(this._popupFontScale) : 1;
     if (
       previous &&
       previous.width === next.width &&
-      previous.height === next.height
+      previous.height === next.height &&
+      normalizePopupFontScale(this.settings.popupLastFontScale) === fontScale
     ) {
       return;
     }
     // Update memory synchronously so opening a new selection immediately after closing
     // this one can already reuse the size; persistence may finish a moment later.
     this.settings.popupLastSize = next;
+    this.settings.popupLastFontScale = fontScale;
     try {
       Promise.resolve(this.saveData?.(this.settings)).catch((error) =>
         console.warn("[mini-translator] 保存翻译框大小失败", error)
@@ -6715,6 +6775,7 @@ module.exports = class MiniTranslator extends Plugin {
 
   showPopup(text, x, y, via, pending, anchor = null) {
     this.closePopup();
+    this.lastPopupText = "";
     // Every popup gets a generation id. A response from a previous selection must not
     // paint into a newly opened popup after the user starts another translation.
     this._popupRunId = (this._popupRunId || 0) + 1;
@@ -6727,6 +6788,10 @@ module.exports = class MiniTranslator extends Plugin {
     const rememberedPopupSize = this.settings?.rememberPopupSize
       ? normalizeRememberedPopupSize(this.settings.popupLastSize)
       : null;
+    this._popupFontScale = this.settings?.popupFontFollowResize && rememberedPopupSize
+      ? normalizePopupFontScale(this.settings.popupLastFontScale) : 1;
+    this._popupFontResizeBase = null;
+    this._popupFontLastSize = null;
     this._popupUserResized = !!rememberedPopupSize;
     this._popupPlacement = null;
     this._popupHorizontalAlignment = null;
@@ -6883,6 +6948,10 @@ module.exports = class MiniTranslator extends Plugin {
       const inResizeCorner =
         e.clientX >= rect.right - 22 && e.clientY >= rect.bottom - 22;
       if (!inResizeCorner) return;
+      this._popupFontResizeBase = {
+        size: { width: rect.width, height: rect.height },
+        scale: normalizePopupFontScale(this._popupFontScale),
+      };
       // Freeze the current natural size, then expose the viewport width to the
       // browser's native resize handle. Later content updates preserve this manual size.
       this._popupUserResized = true;
@@ -6894,6 +6963,7 @@ module.exports = class MiniTranslator extends Plugin {
       this._placePopup(el, this.lastPopupAnchor, { lock: true });
       const finishResize = () => {
         if (!this._popupResizeActive) return;
+        this._updatePopupFontScale(el);
         this._popupResizeActive = false;
         this._popupResizeDirty = true;
         window.removeEventListener("pointerup", finishResize, true);
@@ -6906,6 +6976,8 @@ module.exports = class MiniTranslator extends Plugin {
         settle(() => {
           if (this.popupEl === el) {
             this._placePopup(el, this.lastPopupAnchor, { lock: true });
+            this._popupFontLastSize = readPopupResizeSize(el);
+            this._popupFontResizeBase = null;
             this._rememberCurrentPopupSize(el);
           }
         });
@@ -6940,6 +7012,7 @@ module.exports = class MiniTranslator extends Plugin {
             if (this._popupResizeActive || (inlineBox && inlineChanged)) {
               this._popupUserResized = true;
               this._popupResizeDirty = true;
+              this._updatePopupFontScale(el);
             }
             this._placePopup(el, this.lastPopupAnchor, { lock: true });
             this._scheduleRememberCurrentPopupSize(el);
@@ -7203,6 +7276,9 @@ module.exports = class MiniTranslator extends Plugin {
     this._popupResizeDirty = false;
     this._popupObservedInlineSize = null;
     this._popupSizeMetrics = null;
+    this._popupFontScale = 1;
+    this._popupFontResizeBase = null;
+    this._popupFontLastSize = null;
     this._cancelPopupStreams();
     this._popupSlots = [];
     this._popupSlotBody = null;
@@ -7316,7 +7392,7 @@ module.exports = class MiniTranslator extends Plugin {
     return null;
   }
 
-  async translateSelection(mode = "sentence", selectionSnapshot = null) {
+  async translateSelection(mode = "sentence", selectionSnapshot = null, options = {}) {
     console.log("[mini-translator] 命令已触发");
     const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
     let text = "";
@@ -7403,6 +7479,27 @@ module.exports = class MiniTranslator extends Plugin {
     x = anchor.left;
     y = anchor.bottom + 6;
 
+    if (options.immediate) {
+      // Manual menu action: show a plain source shell synchronously, before
+      // normalization, MathJax or provider startup can hold up the first paint.
+      // No spinner yet: cached translations must not flash a waiting animation.
+      this.showPopup(text, x, y, null, false, anchor);
+      const initialRunId = this._popupRunId;
+      await new Promise((resolve) => {
+        // A microtask alone still runs before paint. Yield a rendering frame and
+        // then resume in a task; this is NOT the automatic selection dwell timer.
+        const resume = () => setTimeout(resolve, 0);
+        if (document.visibilityState !== "hidden" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(resume);
+        } else {
+          resume();
+        }
+      });
+      // Closing the popup or starting another translation during this frame
+      // must not send a request or revive the old popup.
+      if (this._popupRunId !== initialRunId) return;
+    }
+
     const sourceLanguage = safeLanguageCode(
       this.settings.sourceLanguage,
       true
@@ -7446,7 +7543,7 @@ module.exports = class MiniTranslator extends Plugin {
       };
     });
     const pending = sourceEntries.some((entry) => entry.waiting);
-    this.showPopup("", px, py, null, pending, anchor);
+    if (!options.immediate) this.showPopup("", px, py, null, pending, anchor);
     // 原文不再等待翻译结果：先把所有可确定的原文行放进去，后续只替换译文行。
     this.showPopupSources(sourceEntries, null);
     const popupRunId = this._popupRunId;

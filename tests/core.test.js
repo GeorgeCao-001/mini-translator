@@ -43,6 +43,10 @@ const sourceRequire = (request) =>
       ? require(nodePath.join(PROJECT_ROOT, "src", "source-order.js"))
     : request === "./src/source-picker.js"
       ? require(nodePath.join(PROJECT_ROOT, "src", "source-picker.js"))
+    : request === "./src/selection-menu.js"
+      ? require(nodePath.join(PROJECT_ROOT, "src", "selection-menu.js"))
+    : request === "./src/popup-font.js"
+      ? require(nodePath.join(PROJECT_ROOT, "src", "popup-font.js"))
     : require(request);
 const sandbox = { window: {}, document: {}, console, Notice: class {}, require: sourceRequire, module: { exports: {} }, atob: (s) => Buffer.from(s, "base64").toString("binary"), btoa: (s) => Buffer.from(s, "binary").toString("base64") };
 vm.createContext(sandbox);
@@ -502,6 +506,10 @@ const sandbox2 = {
         ? require(nodePath.join(PROJECT_ROOT, "src", "source-order.js"))
       : r === "./src/source-picker.js"
         ? require(nodePath.join(PROJECT_ROOT, "src", "source-picker.js"))
+      : r === "./src/selection-menu.js"
+        ? require(nodePath.join(PROJECT_ROOT, "src", "selection-menu.js"))
+      : r === "./src/popup-font.js"
+        ? require(nodePath.join(PROJECT_ROOT, "src", "popup-font.js"))
       : require(r),
 };
 vm.createContext(sandbox2);

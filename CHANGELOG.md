@@ -4,6 +4,22 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-14
+
+### Added
+
+- Added a single **Translate selected text** context-menu action for editor, reading-view, and PDF selections. It preserves the selected text and popup anchor before menu focus changes, reuses paragraph translation, and leaves existing menu actions intact.
+- Added independent source and translation/dictionary popup font sizes, an optional manual-resize text-scaling toggle, and saved text scale when popup-size memory is enabled. Defaults retain Obsidian typography and fixed text size.
+
+### Fixed
+
+- Removed all evaluated loaders and generated-function paths from the release's embedded PDF.js main/worker builds, retaining native glyph/PostScript interpreters and backporting numeric FontMatrix validation. Upstream inputs and license notices are unchanged.
+- Replaced sidebar `column-gap`/`row-gap` with equivalent `gap` spacing to resolve the remaining multicolumn compatibility warning; added CSS and PDF security regression checks, including real Chromium Worker/fallback rendering.
+- Fixed double-click word selection cancelling pending or in-flight translation, preserving the community contribution in [PR #1](https://github.com/GeorgeCao-001/mini-translator/pull/1).
+- Compacted popup font controls into one settings row with source/translation labels, native numeric steppers, and the resize toggle; restored the stepper arrows hidden by Obsidian's default styles.
+- Manual context-menu translation now closes the menu and shows the source popup immediately, before text processing and provider startup. It no longer holds up the first paint; automatic selection dwell retains its separate configured delay.
+- Normalized release-build text inputs to LF so Windows working copies and clean checkouts of the tagged source produce identical assets.
+
 ## [1.0.2] - 2026-09-24
 
 ### Added

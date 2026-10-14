@@ -14,6 +14,8 @@ Mini Translator is a desktop-only Obsidian plugin for translating selected text,
 
 - **Selection translation** in Markdown, reading views, and PDFs. The popup stays near the real text selection, avoids covering it, and can be resized manually.
 - **Sentence and paragraph modes**. Sentence mode keeps bilingual alignment; paragraph mode preserves more context.
+- **Selection context menu**. Right-click selected text in an editor, reading view, or PDF and choose **Translate selected text**; it uses paragraph mode and preserves the existing menu actions.
+- **Popup font controls**. Set source and translation/dictionary font sizes independently (10–40 px), or leave them empty to follow Obsidian. Optionally scale text when manually resizing the popup; automatic layout changes do not change the text scale.
 - **Multilingual input and output**. Source language can be detected automatically, with more than 70 target-language options and layout handling for CJK and RTL scripts.
 - **Bilingual interface**. Settings, commands, popups, the sidebar, configuration dialogs, progress UI, notices, and generated comparison controls are available in English and Simplified Chinese.
 - **English word lookup** with pronunciation, parts of speech, and definitions.
@@ -46,12 +48,14 @@ Reload Obsidian and enable the plugin. Do not mix files from different releases.
 
 1. Select the language icon in the left ribbon to open the Mini Translator sidebar.
 2. Choose a source-to-target language pair and a translation provider.
-3. Select text and run one of these commands:
+3. Select text, right-click, and choose **Translate selected text** for paragraph translation. The popup opens immediately; the automatic-selection dwell delay does not apply to this manual action. Alternatively, run one of these commands:
    - `Translate selected text (sentence by sentence)`
    - `Translate selected text (paragraph)`
 4. Assign your own hotkeys under **Settings → Hotkeys**, or enable delayed automatic selection translation in the plugin settings.
 
 While a selection translation is pending, double-click outside the popup or press `Esc` to cancel. After translated text appears, a single outside click closes the popup.
+
+Under **Mini Translator settings → Selection popup**, the compact **Font size (px)** row contains source and translation numeric inputs with up/down steppers, plus **Resize text** (off by default). Dragging the bottom-right corner with this option enabled scales body text based on both window dimensions; header buttons stay unchanged. **Remember the last popup size** also remembers the text scale. These settings do not change sidebar text or full-PDF output.
 
 ## Translation and dictionary providers
 
@@ -124,6 +128,8 @@ Before using any remote translation or model provider, review its privacy policy
 - Built-in web endpoints depend on the provider and the user's network environment.
 
 ## Development and release
+
+The release builder hardens the pinned PDF.js 3.11.174 inputs: it removes generated JavaScript and evaluated worker loading, keeps the native glyph/PDF-function interpreters, and validates font matrices. Original third-party files and license notices are preserved. This is targeted hardening, not a full PDF.js upgrade or a guarantee of general PDF safety; Obsidian's own PDF viewer remains managed by Obsidian. See [third-party modification details](THIRD_PARTY_NOTICES.md).
 
 Run the complete offline release check:
 

@@ -3,9 +3,9 @@
 ## 公开版本
 
 - 首个公开版本：`1.0.0`
-- 本次版本：`1.0.2`
+- 本次版本：`1.0.3`
 - 首发最低 Obsidian 版本：`1.13.7`（本机实际验证版本）
-- GitHub Release tag 必须与 `manifest.json` 完全一致：`1.0.2`
+- GitHub Release tag 必须与 `manifest.json` 完全一致：`1.0.3`
 - 不要使用 `v1.0`、`v1.0.0` 或两段式版本号
 - `versions.json` 记录插件版本与最低 Obsidian 版本的对应关系
 
@@ -45,9 +45,11 @@ GitHub Release **只上传以下三个独立附件**：
 | `THIRD_PARTY_NOTICES.md`、`LICENSES/` | 第三方代码归属与许可证 |
 | `main.js`、`styles.css` | 插件源代码与样式源码 |
 | `src/i18n.js` | 简体中文 / English 界面字典与语言切换逻辑 |
+| `src/selection-menu.js`、`src/popup-font.js` | 选区右键菜单和悬浮窗字号 / 缩放策略，构建时内嵌，不增加安装文件 |
 | `src/orbs/translation-orb.js`、`src/orbs/ink-water-orb.js` | 悬浮球模块源码 |
 | `scripts/vendor/pdfjs/pdf.min.js`、`scripts/vendor/pdfjs/pdf.worker.js` | 固定版本的 PDF.js 发布构建输入 |
 | `scripts/` | 发布构建、第三方构建输入、隔离烟测与完整发布检查脚本 |
+| `scripts/pdfjs-hardening.js` | 对固定 PDF.js 输入的可审计构建时安全转换；不修改第三方原文件 |
 | `tests/` | 自动回归测试与手动 PDF 解析诊断，不进入 Release |
 | `docs/PRE_RELEASE_HISTORY.md` | 从主代码移出的发布前内部迭代记录，不进入 Release |
 | `docs/RELEASE.md` | 发布构建、文件分类与上架检查说明，不进入 Release |
@@ -76,13 +78,15 @@ GitHub Release **只上传以下三个独立附件**：
 node scripts/check-release.js
 ```
 
-完整检查会依次运行源码语法检查、`tests/` 下四组自动化测试（包含中英字典键与占位符一致性）、自包含发布构建及隔离烟测、PDF 实际解析测试、社区扫描高风险模式检查、连续构建 SHA-256 一致性检查和 `git diff --check`。发布构建会移除 PDF.js 不需要的动态脚本加载与 Node 文件系统入口，并检查已知 CSS 兼容性警告不会重新进入附件。所有测试均为离线测试，不读取 `data.json`，也不会调用真实翻译服务。
+完整检查会依次运行源码语法检查、全部自动化测试（包含中英字典键与占位符一致性）、PDF 安全加固测试、自包含发布构建及隔离烟测、PDF 实际解析测试、社区扫描高风险模式检查、连续构建 SHA-256 一致性检查和 `git diff --check`。发布构建会移除 PDF.js 不需要的动态脚本加载、求值加载、生成函数和 Node 文件系统入口，并检查已知 CSS 兼容性警告不会重新进入附件。所有自动测试均为离线测试，不读取 `data.json`，也不会调用真实翻译服务。
+
+有已安装的 Chrome／Edge 时，可额外运行 `node tests/manual/check-pdf-security-browser.js <浏览器程序路径>`，验证真实 Blob Worker、Worker 被阻止后的静态回退、PDF 文本／矢量／PostScript 函数渲染和异常字体矩阵；使用隔离临时配置，不安装依赖。
 
 然后确认：
 
 1. `manifest.json` 与 `versions.json` 都是有效 JSON。
-2. 根目录 `manifest.json` 和 Release 附件的版本均为 `1.0.2`。
-3. Release tag 精确为 `1.0.2`。
+2. 根目录 `manifest.json` 和 Release 附件的版本均为 `1.0.3`。
+3. Release tag 精确为 `1.0.3`。
 4. Release 页面包含三个独立附件，而不只是 GitHub 自动生成的源码压缩包。
 5. README 已披露联网服务、明文凭据存储、自动回退和 HTML MathJax CDN。
 6. 从一个空白测试 Vault 仅用三个 Release 附件安装并验证划词、侧边栏、悬浮球与 PDF 全文翻译。

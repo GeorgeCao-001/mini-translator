@@ -19,7 +19,10 @@ class Element {
   }
   empty() { this.children = []; this.text = ""; }
   replaceChildren(...children) { this.empty(); children.forEach((child) => this.appendChild(child)); }
-  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  appendChild(child) {
+    if (child.parentNode) child.parentNode.children = child.parentNode.children.filter((node) => node !== child);
+    child.parentNode = this; this.children.push(child); return child;
+  }
   remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); }
   contains(node) { return this === node || this.children.some((child) => child.contains(node)); }
   setAttribute(name, value) { this[name] = value; }
@@ -27,7 +30,7 @@ class Element {
   createEl(tag, options) { return this.appendChild(new Element(tag, options)); }
   createDiv(options) { return this.createEl("div", options); }
   createSpan(options) { return this.createEl("span", options); }
-  addClass() {}
+  addClass(name) { this.className = `${this.className} ${name}`.trim(); }
   toggleClass() {}
   hide() { this.style.display = "none"; }
   show() { this.style.display = ""; }
@@ -75,8 +78,8 @@ class Setting {
   setDesc(desc) { this.desc = desc; return this; }
   add(kind, callback) {
     const control = kind === "select"
-      ? new DropdownComponent(this.settingEl)
-      : new Control(this.settingEl, kind);
+      ? new DropdownComponent(this.controlEl)
+      : new Control(this.controlEl, kind);
     this.controls.push(control);
     callback(control);
     return this;
@@ -120,6 +123,8 @@ const sandbox = {
     if (name === "./src/model-config.js") return require(path.join(__dirname, "..", "src", "model-config.js"));
     if (name === "./src/source-order.js") return require(path.join(__dirname, "..", "src", "source-order.js"));
     if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
+    if (name === "./src/selection-menu.js") return require(path.join(__dirname, "..", "src", "selection-menu.js"));
+    if (name === "./src/popup-font.js") return require(path.join(__dirname, "..", "src", "popup-font.js"));
     throw new Error("Unexpected dependency in offline UI test: " + name);
   },
   document: { body: new Element(), createElement: (tag) => new Element(tag) },
@@ -153,6 +158,7 @@ function button(root, text) {
   return matches[0];
 }
 function field(root, name) { return setting(root, name).controls[0]; }
+function fontControl(root, index) { return setting(root, "字号（px）").controls[index]; }
 function controlWithOption(root, option) {
   const matches = nodes(root)
     .map((node) => node.control)
@@ -328,6 +334,64 @@ async function test(name, callback) {
     expectFields(opened.contentEl, ["配置类型"]);
     tab.display();
     assert.equal(settings(tab.containerEl).length, names.length);
+    tab.unsubSources?.();
+  });
+  await test("popup font controls save independently and refresh the open popup immediately", async () => {
+    const fontPlugin = pluginFixture();
+    fontPlugin.popupEl = {};
+    let refreshed = 0;
+    fontPlugin._applyPopupSize = () => refreshed++;
+    fontPlugin._placePopup = () => {};
+    const tab = new sandbox.__ui.MiniTranslatorSettingTab({}, fontPlugin);
+    tab.display();
+    const source = fontControl(tab.containerEl, 0);
+    const target = fontControl(tab.containerEl, 1);
+    const row = setting(tab.containerEl, "字号（px）");
+    assert.equal(row.controls.length, 3, "One compact row contains both fonts and the toggle");
+    assert.ok(row.settingEl.className.includes("mini-popup-font-setting"));
+    assert.ok(!settings(tab.containerEl).some((item) => ["原文字号（px）", "译文 / 词典字号（px）", "字号跟随悬浮窗缩放"].includes(item.name)));
+    assert.equal(source.inputEl.type, "number");
+    assert.equal(source.inputEl.placeholder, "默认");
+    assert.equal(source.inputEl["aria-label"], "原文字号（px）");
+    assert.equal(target.inputEl["aria-label"], "译文 / 词典字号（px）");
+    assert.equal(source.inputEl.min, "10"); assert.equal(source.inputEl.max, "40");
+    await source.choose("14"); await target.choose("22");
+    assert.equal(fontPlugin.settings.popupSourceFontSize, 14);
+    assert.equal(fontPlugin.settings.popupTargetFontSize, 22);
+    assert.equal(fontPlugin.saves.length, 2); assert.equal(refreshed, 2);
+    await source.choose("");
+    assert.equal(fontPlugin.settings.popupSourceFontSize, 0, "Empty input restores Obsidian's source typography");
+    assert.equal(fontPlugin.settings.popupTargetFontSize, 22);
+    tab.display();
+    assert.equal(fontControl(tab.containerEl, 1).inputEl.value, "22");
+    assert.equal(fontControl(tab.containerEl, 0).inputEl.value, "");
+    tab.unsubSources?.();
+  });
+  await test("invalid font inputs do not overwrite or persist a user's setting", async () => {
+    const fontPlugin = pluginFixture(); fontPlugin.settings.popupTargetFontSize = 20;
+    const tab = new sandbox.__ui.MiniTranslatorSettingTab({}, fontPlugin); tab.display();
+    for (const value of ["9", "41", "17.5", "x"]) {
+      await fontControl(tab.containerEl, 1).choose(value);
+    }
+    assert.equal(fontPlugin.settings.popupTargetFontSize, 20);
+    assert.equal(fontPlugin.saves.length, 0); tab.unsubSources?.();
+  });
+  await test("font-follow toggle clears stale zoom and saved-size reset also clears saved scale", async () => {
+    const fontPlugin = pluginFixture();
+    fontPlugin.settings.popupLastSize = { width: 600, height: 400 };
+    fontPlugin.settings.popupLastFontScale = 2;
+    fontPlugin._popupFontScale = 2;
+    fontPlugin._popupFontResizeBase = {};
+    const tab = new sandbox.__ui.MiniTranslatorSettingTab({}, fontPlugin); tab.display();
+    await fontControl(tab.containerEl, 2).choose(true);
+    assert.equal(fontPlugin.settings.popupFontFollowResize, true);
+    assert.equal(fontPlugin._popupFontScale, 1);
+    assert.equal(fontPlugin._popupFontResizeBase, null);
+    assert.equal(fontPlugin.settings.popupLastFontScale, 1);
+    fontPlugin.settings.popupLastFontScale = 1.5;
+    await button(tab.containerEl, "清除记录").click();
+    assert.equal(fontPlugin.settings.popupLastSize, null);
+    assert.equal(fontPlugin.settings.popupLastFontScale, 1);
     tab.unsubSources?.();
   });
   await test("source dropdowns drag to reorder without adding separate settings rows", async () => {
@@ -607,6 +671,12 @@ async function test(name, callback) {
         "Azure Translator Key",
         "Bing region",
       ]);
+      const tab = new sandbox.__ui.MiniTranslatorSettingTab({}, pluginFixture());
+      tab.display();
+      const row = setting(tab.containerEl, "Font size (px)");
+      assert.equal(row.controls[0].inputEl.placeholder, "Auto");
+      assert.equal(row.controls[2].inputEl["aria-label"], "Scale text with popup resizing");
+      tab.unsubSources?.();
     } finally {
       i18n.setUiLanguage("zh-CN");
     }

@@ -81,7 +81,7 @@ const sandbox = {
   setInterval,
   clearInterval,
 };
-vm.createContext(sandbox);
+vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
 const source = fs.readFileSync(mainFile, "utf8");
 // The release bundle must not retain the old project-owned Node filesystem
 // fallback. PDF.js itself is embedded below and is audited separately as a
@@ -99,8 +99,8 @@ if (!source.includes("lib.getDocument({ data, isEvalSupported: false })")) {
 
 // The upstream PDF.js inputs are kept unmodified under scripts/vendor. The
 // release hardening must remove its fake-worker script injection and disable
-// its unused Node-only filesystem branches. Other reviewed third-party
-// constructs must remain byte-for-byte represented by occurrence count.
+// its unused Node-only filesystem branches, and genuinely remove generated
+// functions/evaluated loaders rather than hiding them from a scanner.
 const pdfSource = fs.readFileSync(
   path.join(root, "scripts", "vendor", "pdfjs", "pdf.min.js"),
   "utf8"
@@ -121,19 +121,12 @@ if (/require\(["']fs["']\)/.test(source)) {
 if (!source.includes("PDF.js Node filesystem access is disabled in Mini Translator")) {
   throw new Error("release bundle is missing the fail-closed PDF.js filesystem guard");
 }
-const scannerPatterns = [
-  "new Function",
-  'eval("require")',
-];
-const countOccurrences = (text, pattern) => text.split(pattern).length - 1;
-for (const pattern of scannerPatterns) {
-  const expected = countOccurrences(pdfSource, pattern) + countOccurrences(workerSource, pattern);
-  const actual = countOccurrences(source, pattern);
-  if (actual !== expected) {
-    throw new Error(
-      `unexpected release occurrence count for ${pattern}: expected ${expected}, got ${actual}`
-    );
-  }
+for (const pattern of [/\bnew\s+Function\s*\(/, /\beval\s*\(/]) {
+  if (pattern.test(source)) throw new Error("release bundle still generates or evaluates JavaScript");
+}
+for (const input of [pdfSource, workerSource]) {
+  const notice = input.slice(0, input.indexOf("!function webpackUniversalModuleDefinition"));
+  if (!notice || !source.includes(notice)) throw new Error("PDF.js upstream license notice was lost");
 }
 const releaseCss = fs.readFileSync(path.join(root, "dist", "styles.css"), "utf8");
 const cssWarningPatterns = [
@@ -141,6 +134,7 @@ const cssWarningPatterns = [
   ["text-indent", /\btext-indent\s*:/],
   ["clip-path", /\b(?:-webkit-)?clip-path\s*:/],
   ["mjx-container type selector", /(^|[,\s>+~])mjx-container(?=[\s.#[:]|$)/m],
+  ["multicolumn declarations", /(?:^|[;{\s])(?:columns|column-(?:gap|count|width|span|fill|rule(?:-color|-style|-width)?))\s*:/m],
 ];
 for (const [label, pattern] of cssWarningPatterns) {
   if (pattern.test(releaseCss)) {
@@ -148,6 +142,7 @@ for (const [label, pattern] of cssWarningPatterns) {
   }
 }
 console.log("PASS dynamic scripts and Node filesystem access removed from the release");
+console.log("PASS generated functions and evaluated loaders removed from main and worker");
 console.log("PASS known Obsidian CSS warning patterns removed from the release");
 vm.runInContext(
   `${source}\n;globalThis.__releaseTest = { loadPdfJs, loadOrbModule, BUNDLED_RUNTIME };`,
@@ -183,6 +178,12 @@ if (
 if (typeof runtime.sourcePicker?.createSourcePicker !== "function") {
   throw new Error("发布构建没有正确注入可拖动翻译源下拉控件");
 }
+if (typeof runtime.selectionMenu?.registerSelectionTranslationMenu !== "function") {
+  throw new Error("发布构建没有正确注入选区右键菜单模块");
+}
+if (runtime.popupFont?.popupFontStyles({ popupTargetFontSize: 20 }).target !== "20px") {
+  throw new Error("发布构建没有正确注入悬浮窗字号模块");
+}
 if (runtime.getPdfWorkerSource().length < 1_000_000) {
   throw new Error("发布构建中的 PDF worker 不完整");
 }
@@ -198,7 +199,7 @@ const workerSandbox = {
   setTimeout,
   clearTimeout,
 };
-vm.createContext(workerSandbox);
+vm.createContext(workerSandbox, { codeGeneration: { strings: false, wasm: false } });
 vm.runInContext(runtime.getPdfWorkerSource(), workerSandbox, {
   filename: "embedded-pdf.worker.js",
 });

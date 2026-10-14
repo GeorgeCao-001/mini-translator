@@ -10,12 +10,21 @@ Mini Translator as a whole is distributed under the GNU Affero General Public Li
 
 - Upstream project: [mozilla/pdf.js](https://github.com/mozilla/pdf.js)
 - Bundled version: 3.11.174
+- Fixed-version source: [PDF.js v3.11.174](https://github.com/mozilla/pdf.js/tree/v3.11.174)
 - Copyright notice: Copyright 2023 Mozilla Foundation
 - License: Apache License 2.0
 - License text: [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt)
 - Bundled build inputs: `scripts/vendor/pdfjs/pdf.min.js` and `scripts/vendor/pdfjs/pdf.worker.js`
 
-The release build embeds both files into the distributed `main.js`; their upstream copyright and license notices remain intact. Mini Translator's release builder replaces PDF.js's browser fake-worker script-element loader with a statically bundled main-thread worker fallback, so a failed Web Worker cannot trigger dynamic script injection. It also disables the generic bundle's three Node-only filesystem branches: the plugin always supplies an in-memory `Uint8Array`, and any unexpected attempt to enter those branches fails closed. The normal Blob-backed Web Worker path and the worker implementation remain available.
+The release build embeds both files into the distributed `main.js`; their upstream copyright and license notices remain intact. `scripts/pdfjs-hardening.js` applies reviewed, exact-match transformations at build time; the vendored inputs are not edited. It:
+
+- replaces both the script-element loader and evaluated Node worker loader with a statically bundled main-thread worker fallback;
+- disables the generic main bundle's three Node-only filesystem imports, failing closed if unexpectedly reached;
+- removes generated JavaScript from glyph drawing and PDF PostScript functions, retaining upstream interpreters, range clipping and caching;
+- replaces generated-code capability probes with a fixed disabled capability in both main and worker;
+- backports the six-number FontMatrix validation from [Mozilla PR #18015](https://github.com/mozilla/pdf.js/pull/18015), also rejecting non-finite numbers.
+
+The glyph change follows the no-generated-code direction of that security patch while preserving 3.11.174's command representation; it is not a wholesale port of the newer rendering architecture. These changes address the generated-glyph-code mechanism behind [CVE-2024-4367](https://github.com/mozilla/pdf.js/security/advisories/GHSA-wgrm-67xf-hhpq), not every potential defect in this older PDF.js version. The normal Blob-backed Web Worker, static fallback, glyph rendering and PDF-function interpreter remain available. Plugin-owned parsing continues to pass `isEvalSupported: false`; existing documents obtained from Obsidian's native viewer are managed by Obsidian, not this bundled runtime.
 
 ## Adapted code
 

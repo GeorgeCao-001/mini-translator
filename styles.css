@@ -223,8 +223,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  column-gap: 12px;
-  row-gap: 8px;
+  gap: 8px 12px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--background-modifier-border);
 }
@@ -300,6 +299,53 @@ button.mini-source-picker-trigger {
   justify-content: flex-start;
   text-align: left;
   box-shadow: none;
+}
+
+/* One compact row for popup typography; never resize unrelated settings inputs. */
+.setting-item.mini-popup-font-setting {
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-block: 10px;
+}
+
+.mini-popup-font-setting .setting-item-info {
+  flex: 0 1 auto;
+  margin-inline-end: 0;
+}
+
+.mini-popup-font-setting .setting-item-control {
+  flex: 0 1 auto;
+  display: flex;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.mini-popup-font-field,
+.mini-popup-font-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: var(--font-ui-small);
+}
+
+.mini-popup-font-setting .mini-popup-font-field input[type="number"] {
+  width: 5.6em;
+  min-width: 5.6em;
+  max-width: 5.6em;
+  height: var(--input-height);
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Obsidian hides native number spinners globally. Restore them only here. */
+.mini-popup-font-setting input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: auto;
+  opacity: 1;
 }
 
 button.mini-source-picker-trigger:hover,
@@ -673,14 +719,14 @@ button.mini-source-picker-trigger:focus-visible {
 }
 
 .mini-translator-popup .mini-en-line {
-  font-size: calc(var(--font-smaller) + var(--mini-popup-small-text-boost, 0px));
+  font-size: var(--mini-popup-source-font-size, calc(var(--font-smaller) + var(--mini-popup-small-text-boost, 0px)));
   line-height: 1.5;
   margin-bottom: 4px;
 }
 
 .mini-translator-popup .mini-zh-line,
 .mini-translator-popup .mini-dict-line {
-  font-size: calc(var(--font-text-size) + var(--mini-popup-text-boost, 0px));
+  font-size: var(--mini-popup-target-font-size, calc(var(--font-text-size) + var(--mini-popup-text-boost, 0px)));
   line-height: 1.6;
   margin-bottom: 8px;
 }

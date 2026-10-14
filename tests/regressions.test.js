@@ -34,6 +34,8 @@ const sandbox = {
     if (name === "./src/model-config.js") return require(path.join(__dirname, "..", "src", "model-config.js"));
     if (name === "./src/source-order.js") return require(path.join(__dirname, "..", "src", "source-order.js"));
     if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
+    if (name === "./src/selection-menu.js") return require(path.join(__dirname, "..", "src", "selection-menu.js"));
+    if (name === "./src/popup-font.js") return require(path.join(__dirname, "..", "src", "popup-font.js"));
     throw new Error("Unexpected dependency in offline regression: " + name);
   },
 };

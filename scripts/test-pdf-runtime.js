@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const { makePdfSecurityFixture } = require("../tests/helpers/pdf-security-fixtures.js");
 
 const root = path.resolve(__dirname, "..");
 
@@ -105,7 +106,7 @@ const sandbox = {
   btoa: (value) => Buffer.from(value, "binary").toString("base64"),
 };
 
-vm.createContext(sandbox);
+vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
 const source = fs.readFileSync(path.join(root, "dist", "main.js"), "utf8");
 vm.runInContext(
   `${source}\n;globalThis.__pdfIntegration = { loadPdfJs, BUNDLED_RUNTIME };`,
@@ -116,33 +117,39 @@ vm.runInContext(
 (async () => {
   const pdfjs = sandbox.__pdfIntegration.loadPdfJs({});
   const externalPdf = process.argv[2] ? path.resolve(process.argv[2]) : null;
-  const task = pdfjs.getDocument({
-    data: externalPdf
-      ? new Uint8Array(fs.readFileSync(externalPdf))
-      : makeMinimalPdf(),
-    isEvalSupported: false,
-  });
-  const document = await task.promise;
-  const page = await document.getPage(1);
-  const textContent = await page.getTextContent();
-  const text = textContent.items.map((item) => item.str).join(" ");
-  if (typeof sandbox.window.pdfjsWorker?.WorkerMessageHandler !== "function") {
-    throw new Error("safe bundled PDF worker fallback was not initialized");
+  const cases = externalPdf
+    ? [{ name: externalPdf, data: new Uint8Array(fs.readFileSync(externalPdf)), isEvalSupported: false }]
+    : [
+      { name: "minimal PDF", data: makeMinimalPdf(), isEvalSupported: false },
+      { name: "text/vector/PostScript PDF", data: makePdfSecurityFixture(), isEvalSupported: true, shading: true },
+      { name: "malformed-font-matrix PDF", data: makePdfSecurityFixture(true), isEvalSupported: true, shading: true },
+    ];
+  for (const sample of cases) {
+    const task = pdfjs.getDocument({ data: sample.data, isEvalSupported: sample.isEvalSupported });
+    const document = await task.promise;
+    const page = await document.getPage(1);
+    const textContent = await page.getTextContent();
+    const text = textContent.items.map((item) => item.str).join(" ");
+    const operators = await page.getOperatorList();
+    if (!operators.fnArray.length || (sample.shading && !operators.fnArray.includes(pdfjs.OPS.shadingFill))) {
+      throw new Error("PDF drawing/function operators were lost: " + sample.name);
+    }
+    if (typeof sandbox.window.pdfjsWorker?.WorkerMessageHandler !== "function") {
+      throw new Error("safe bundled PDF worker fallback was not initialized");
+    }
+    if (
+      externalPdf
+        ? document.numPages < 1 || !text.trim()
+        : document.numPages !== 1 || text !== "Hello Mini Translator"
+    ) {
+      throw new Error(`unexpected PDF parse result: pages=${document.numPages}, text=${text}`);
+    }
+    if (unexpectedRequires.length) {
+      throw new Error(`unexpected release dependencies: ${unexpectedRequires.join(", ")}`);
+    }
+    await document.destroy();
+    console.log(`PASS embedded PDF.js and worker parse ${sample.name} without dynamic scripts/generated code`);
   }
-  if (
-    externalPdf
-      ? document.numPages < 1 || !text.trim()
-      : document.numPages !== 1 || text !== "Hello Mini Translator"
-  ) {
-    throw new Error(`unexpected PDF parse result: pages=${document.numPages}, text=${text}`);
-  }
-  if (unexpectedRequires.length) {
-    throw new Error(`unexpected release dependencies: ${unexpectedRequires.join(", ")}`);
-  }
-  await document.destroy();
-  console.log(
-    `PASS embedded PDF.js and worker parse ${externalPdf || "the generated PDF"} without dynamic scripts`
-  );
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
