@@ -184,6 +184,11 @@ if (typeof runtime.selectionMenu?.registerSelectionTranslationMenu !== "function
 if (runtime.popupFont?.popupFontStyles({ popupTargetFontSize: 20 }).target !== "20px") {
   throw new Error("发布构建没有正确注入悬浮窗字号模块");
 }
+if (runtime.pageRanges?.parsePageRange("2,4", 5).label !== "2, 4" ||
+    typeof runtime.pdfFilePicker?.createPdfFilePicker !== "function" ||
+    typeof runtime.pdfTranslationUi?.createTranslationModals !== "function") {
+  throw new Error("Release lacks the PDF range / file picker modules");
+}
 if (runtime.getPdfWorkerSource().length < 1_000_000) {
   throw new Error("发布构建中的 PDF worker 不完整");
 }

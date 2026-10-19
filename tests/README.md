@@ -14,6 +14,7 @@ node tests/source-order.test.js
 node tests/source-order-integration.test.js
 node tests/config-ui.test.js
 node tests/selection-menu.test.js
+node tests/pdf-selection.test.js
 node tests/popup-font.test.js
 node tests/regressions.test.js
 node tests/pdfjs-hardening.test.js
@@ -29,6 +30,7 @@ node tests/pdfjs-hardening.test.js
 | `config-ui.test.js` | API configuration visibility, draft creation, validation, cancellation, retry, duplicate prevention, draggable source picker controls, and one-row sidebar selector layout |
 | `selection-menu.test.js` | Editor/reading/PDF menu scope, selection snapshots, localization, duplicate prevention, unloading, immediate manual popup/paint-before-request timing, cached results, cancellation and separate automatic dwell; also runs against `dist/main.js` |
 | `popup-font.test.js` | Font normalization, source/target hierarchy, fixed versus resize scaling, native-size geometry, scale persistence, content/viewport-clamp isolation and actual popup resize callbacks; also runs against `dist/main.js` |
+| `pdf-selection.test.js` | Physical-page range parsing, stable folder/search/Shift selection, independent per-file ranges, stale/closed analysis, PDF ownership, page-limited extraction/requests and Markdown/HTML original-page numbering; source and bundle |
 | `regressions.test.js` | Truncated LLM responses, batch parsing, and cross-page continuation regressions |
 | `pdfjs-hardening.test.js` | Exact-match/fail-closed transformations, retained license notices, no generated code even when enabled by callers, inert injection-style glyph arguments, FontMatrix validation, glyph/PostScript interpreter parity and static Worker fallback |
 
@@ -75,3 +77,11 @@ node scripts/check-release.js
 ```
 
 This runs syntax checks, all automated suites, the self-contained release build and smoke test, text/vector/PostScript and malformed-font PDF parses with string code generation disabled, a deterministic-build comparison, and `git diff --check`. The optional genuine browser render check must be run separately where Chromium is available.
+
+Optional isolated layout check (existing browser, no Obsidian access, screenshots or recording):
+
+`node tests/manual/check-pdf-picker-browser.js <existing-chrome-path>`
+
+Covers Chinese/English, 1100/480px widths, fixed-footer visibility, overflow, list/input identity, caret and scroll retention.
+
+The picker layout check also asserts **computed display and rendered client rectangles**, not just the `hidden` property: initial collapse, expansion, re-collapse, selected-only, search intersections and removing the last selected file. This reproduces the flex/CSS cascade regression without opening Obsidian.

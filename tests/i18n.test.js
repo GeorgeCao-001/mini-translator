@@ -26,7 +26,7 @@ assert.equal(i18n.t("common.cancel"), "取消");
 assert.equal(i18n.languageName("ja", "日语"), "日语");
 assert.equal(i18n.providerName("有道"), "有道");
 
-const main = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+const main = ["main.js", "src/page-ranges.js", "src/pdf-file-picker.js", "src/pdf-translation-ui.js"].map(file => fs.readFileSync(path.join(__dirname, "..", file), "utf8")).join("\n");
 const usedKeys = [...main.matchAll(/\bt\(\s*["']([^"']+)["']/g)].map((match) => match[1]);
 for (const key of new Set(usedKeys)) {
   assert.equal(i18n.hasMessageKey(key), true, `missing localized message used by main.js: ${key}`);

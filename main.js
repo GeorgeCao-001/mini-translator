@@ -69,6 +69,11 @@ const { registerSelectionTranslationMenu } = SELECTION_MENU;
 const { normalizePopupFontSize, normalizePopupFontScale, resizePopupFontScale,
   readPopupResizeSize, popupFontStyles, addPopupFontSettings } = POPUP_FONT;
 
+const PAGE_RANGES = BUNDLED_RUNTIME?.pageRanges || require("./src/page-ranges.js");
+const PDF_FILE_PICKER = BUNDLED_RUNTIME?.pdfFilePicker || require("./src/pdf-file-picker.js");
+const PDF_TRANSLATION_UI = BUNDLED_RUNTIME?.pdfTranslationUi || require("./src/pdf-translation-ui.js");
+const { parsePageRange, formatPageRanges, normalizePageNumbers, validateBlockPages } = PAGE_RANGES;
+
 const WORD_RE = /^[a-zA-Z][a-zA-Z'’]*$/;
 const VIEW_TYPE = "mini-translator-view";
 const UA =
@@ -2711,10 +2716,10 @@ async function getPdfDocForFile(plugin, file) {
       if (leaf.view.file && leaf.view.file.path === file.path) {
         const child = leaf.view.viewer && leaf.view.viewer.child;
         const pv = child && (child.pdfViewer || child);
-        if (pv && pv.pdfDocument) return { doc: pv.pdfDocument };
+        if (pv && pv.pdfDocument) return { doc: pv.pdfDocument, owned: false };
         if (pv && pv.pdfLoadingTask && pv.pdfLoadingTask.promise) {
           const doc = await pv.pdfLoadingTask.promise;
-          return { doc };
+          return { doc, owned: false };
         }
       }
     } catch (e) {}
@@ -2725,7 +2730,7 @@ async function getPdfDocForFile(plugin, file) {
   // Disable those optimizations for plugin-owned parsing so untrusted PDFs do
   // not enable runtime code generation in Mini Translator's normal path.
   const doc = await lib.getDocument({ data, isEvalSupported: false }).promise;
-  return { doc };
+  return { doc, owned: true };
 }
 
 // token 估算（输入+输出粗估）：英文约 3.5 字符 ≈ 1 token
@@ -2850,7 +2855,8 @@ function groupIntoBatches(blocks) {
     const isFootnote = blocks[i]?.kind === "footnote";
     if (
       cur.length &&
-      (cur.length >= 8 || chars + L > 2600 || isFootnote !== curIsFootnote)
+      (cur.length >= 8 || chars + L > 2600 || isFootnote !== curIsFootnote ||
+        (blocks[i].page > (blocks[cur.at(-1)]?.continuedThroughPage ?? blocks[cur.at(-1)]?.page) + 1))
     ) {
       batches.push(cur);
       cur = [];
@@ -3037,15 +3043,19 @@ function normChromeLine(s) {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-async function extractDocBlocks(doc, onProg) {
+async function extractDocBlocks(doc, onProg, pageNumbers = null, shouldCancel = () => false) {
   const pages = [];
-  const n = doc.numPages;
-  for (let i = 1; i <= n; i++) {
-    if (onProg) onProg(i, n);
+  const nums = normalizePageNumbers(pageNumbers, doc.numPages);
+  for (let pos = 0; pos < nums.length; pos++) {
+    if (shouldCancel()) throw new Error("PDF selection superseded");
+    const i = nums[pos];
+    if (onProg) onProg(pos + 1, nums.length, i);
     const page = await doc.getPage(i);
     const viewport = page.getViewport({ scale: 1 });
     const tc = await page.getTextContent();
+    if (shouldCancel()) throw new Error("PDF selection superseded");
     pages.push({
+      pageNo: i,
       lines: pdfItemsToBlocks(tc.items, viewport.width),
       width: viewport.width,
       height: viewport.height,
@@ -3077,7 +3087,7 @@ async function extractDocBlocks(doc, onProg) {
   let omittedFigureLabels = 0;
   let footnoteLines = 0;
   let footnoteBlocks = 0;
-  pages.forEach((page, pi) => {
+  pages.forEach((page) => {
     const kept = chrome.size
       ? page.lines.filter((l) => !chrome.has(normChromeLine(l.text)))
       : page.lines;
@@ -3091,7 +3101,7 @@ async function extractDocBlocks(doc, onProg) {
       withoutPageNumbers,
       page.width,
       page.height,
-      pi + 1
+      page.pageNo
     );
     if (ordered.columns === 2) twoColumnPages++;
     omittedFigureLabels += ordered.omittedFigureLabels || 0;
@@ -3103,7 +3113,7 @@ async function extractDocBlocks(doc, onProg) {
     const pb = joinColumnContinuationParas(pruned.paras);
     footnoteBlocks += pb.filter((b) => b.kind === "footnote").length;
     parasByPage.push(pb.map((b) => b.text));
-    for (const b of pb) blocks.push({ ...b, page: pi + 1 });
+    for (const b of pb) blocks.push({ ...b, page: page.pageNo });
   });
   const logicalBlocks = joinCrossPageContinuationBlocks(blocks);
   return {
@@ -3574,17 +3584,19 @@ function mergeRasterRegions(regions, pageWidth, pageHeight) {
     .slice(0, 12);
 }
 
-async function detectRasterFigures(plugin, doc, onProg) {
+async function detectRasterFigures(plugin, doc, onProg, pageNumbers = null) {
+  const nums = normalizePageNumbers(pageNumbers, doc.numPages);
   const cached = FIGURE_REGION_CACHE.get(doc);
   if (cached) {
-    if (onProg) onProg(doc.numPages, doc.numPages);
-    return cached;
+    if (onProg) onProg(nums.length, nums.length);
+    return new Map([...cached].filter(([p]) => nums.includes(p)));
   }
   const lib = loadPdfJs(plugin);
   const OPS = lib.OPS || {};
   const out = new Map();
-  for (let pageNo = 1; pageNo <= doc.numPages; pageNo++) {
-    if (onProg) onProg(pageNo, doc.numPages);
+  for (let pos = 0; pos < nums.length; pos++) {
+    const pageNo = nums[pos];
+    if (onProg) onProg(pos + 1, nums.length);
     const page = await doc.getPage(pageNo);
     const opList = await page.getOperatorList();
     const viewport = page.getViewport({ scale: 1 });
@@ -3638,7 +3650,7 @@ async function detectRasterFigures(plugin, doc, onProg) {
     const figures = mergeRasterRegions(raw, viewport.width, viewport.height);
     if (figures.length) out.set(pageNo, figures);
   }
-  FIGURE_REGION_CACHE.set(doc, out);
+  if (nums.length === doc.numPages) FIGURE_REGION_CACHE.set(doc, out);
   return out;
 }
 
@@ -3931,10 +3943,11 @@ function buildReplicaHtml(meta, pages) {
   const qualityNotice = languageQualityNotice(sourceCode, targetCode);
   const pgHtml = pages
     .map((p, pageIndex) => {
+      const pageNumber = p.number || pageIndex + 1;
       const valid = (p.blocks || []).filter((b) => !b.skip && b.zh);
       const markers = valid
         .flatMap((b, blockIndex) => {
-          const id = `p${pageIndex + 1}-b${blockIndex + 1}`;
+          const id = `p${pageNumber}-b${blockIndex + 1}`;
           const rects = b.rects?.length ? b.rects : b.rect ? [b.rect] : [];
           return rects.map(
             (r, rectIndex) =>
@@ -3947,7 +3960,7 @@ function buildReplicaHtml(meta, pages) {
       let footnoteHeadingShown = false;
       const translated = valid
         .map((b, blockIndex) => {
-          const id = `p${pageIndex + 1}-b${blockIndex + 1}`;
+          const id = `p${pageNumber}-b${blockIndex + 1}`;
           const isFootnote = b.kind === "footnote";
           const footnoteHeading =
             isFootnote && !footnoteHeadingShown
@@ -3963,10 +3976,10 @@ function buildReplicaHtml(meta, pages) {
         })
         .join("");
       return (
-        `<section class="page-card" data-page="${pageIndex + 1}">` +
-        `<header class="page-title"><span>${escapeHtml(t("html.page", { page: pageIndex + 1 }))}</span><span>${escapeHtml(t("html.block_count", { count: valid.length }))}</span></header>` +
+        `<section class="page-card" data-page="${pageNumber}">` +
+        `<header class="page-title"><span>${escapeHtml(t("html.page", { page: pageNumber }))}</span><span>${escapeHtml(t("html.block_count", { count: valid.length }))}</span></header>` +
         `<div class="page-grid"><div class="source-pane"><div class="source-page">` +
-        `<img src="${p.img}" alt="${escapeHtml(t("html.source_alt", { page: pageIndex + 1 }))}" loading="lazy"/>${markers}</div></div>` +
+        `<img src="${p.img}" alt="${escapeHtml(t("html.source_alt", { page: pageNumber }))}" loading="lazy"/>${markers}</div></div>` +
         `<article class="translation-pane">${translated || `<p class="empty">${escapeHtml(t("html.no_translation"))}</p>`}</article>` +
         `</div></section>`
       );
@@ -4094,372 +4107,11 @@ document.getElementById("tSave").addEventListener("click",function(){
 }
 
 // ---------- 全文翻译：开始前确认弹窗（页数/请求数/预计耗时，点头才开跑） ----------
-class FullTranslateModal extends Modal {
-  constructor(app, plugin, info) {
-    super(app);
-    this.plugin = plugin;
-    this.info = info;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h3", { text: t("full.confirm_title") });
-    const grid = contentEl.createDiv();
-    grid.style.lineHeight = "1.9";
-    grid.style.fontSize = "var(--font-ui-small)";
-    for (const l of [
-      t("full.document", { file: this.info.fileName, pages: this.info.pages }),
-      t("full.blocks", { blocks: this.info.transN }),
-      t("full.requests", {
-        tokens: fmtTok(this.info.tokensEst || 0),
-        requests: this.info.chunks,
-      }),
-      t("full.eta", { eta: this.info.eta }),
-      t("full.provider", { source: this.info.source }),
-      this.plugin.settings.fullHtml
-        ? t("full.output_html")
-        : t("full.output_markdown"),
-    ]) {
-      grid.createDiv({ text: l });
-    }
-    const qualityNotice = languageQualityNotice(
-      this.info.sourceLanguage,
-      this.info.targetLanguage
-    );
-    if (qualityNotice) {
-      grid.createDiv({
-        cls: "mini-language-settings-notice",
-        text: qualityNotice,
-      });
-    }
-    const btns = contentEl.createDiv();
-    btns.style.display = "flex";
-    btns.style.gap = "8px";
-    btns.style.marginTop = "14px";
-    const start = btns.createEl("button", {
-      text: t("full.start"),
-      cls: "mod-cta",
-    });
-    start.onclick = () => {
-      this.close();
-      void this.plugin
-        .runFullTranslate(this.info)
-        .catch((error) =>
-          this.plugin.reportFullTranslateFailure(error, this.info)
-        );
-    };
-    const cancel = btns.createEl("button", { text: t("common.cancel") });
-    cancel.onclick = () => this.close();
-  }
-  onClose() {
-    this.contentEl.empty();
-  }
-}
-
-// ---------- 弹窗：勾选 vault 里的一个/多个 PDF 全文翻译，底部实时汇总 token 估算 ----------
-class FilePickTranslateModal extends Modal {
-  constructor(app, plugin) {
-    super(app);
-    this.plugin = plugin;
-    this.selected = new Set(); // path
-    this.statsCache = new Map(); // path -> {pages, blocksN, batchesN, chars, tokensEst}
-    this.blocksCache = new Map(); // path -> blocks（开跑时直接复用，免二次解析）
-    this.docsCache = new Map(); // path -> pdf.js document（同上：开跑复用，启动提速）
-    this.pending = new Set(); // 正在统计的 path
-    this.failed = new Map(); // path -> 失败原因
-    this.chain = Promise.resolve(); // 解析任务串行化，避免同时啃多个大文件
-    this.openDirs = new Set(); // 目录树上展开的文件夹 path
-  }
-
-  // vault PDF 列表 → 文件系统目录树（只含含 PDF 的分支）
-  buildTree(files) {
-    const root = { name: "", path: "", dirs: new Map(), pdfs: [] };
-    for (const f of files) {
-      const parts = f.path.split("/");
-      let node = root;
-      for (let i = 0; i < parts.length - 1; i++) {
-        const seg = parts[i];
-        if (!node.dirs.has(seg))
-          node.dirs.set(seg, {
-            name: seg,
-            path: parts.slice(0, i + 1).join("/"),
-            dirs: new Map(),
-            pdfs: [],
-          });
-        node = node.dirs.get(seg);
-      }
-      node.pdfs.push(f);
-    }
-    return root;
-  }
-
-  // 节点下全部 PDF（递归），供文件夹全选/计数
-  collectPdfs(node, out) {
-    for (const f of node.pdfs) out.push(f);
-    for (const d of node.dirs.values()) this.collectPdfs(d, out);
-    return out;
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h3", { text: t("full.pick_title") });
-    const search = contentEl.createEl("input", { type: "text" });
-    search.placeholder = t("full.search_files");
-    search.style.cssText =
-      "width:100%;margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid var(--background-modifier-border);background:var(--background-primary);color:var(--text-normal)";
-    const listEl = contentEl.createDiv();
-    listEl.style.cssText =
-      "max-height:300px;overflow-y:auto;border:1px solid var(--background-modifier-border);border-radius:8px;padding:4px;";
-    this.listElRef = listEl;
-    this.summaryEl = contentEl.createDiv({ cls: "mini-pick-summary" });
-
-    const files = this.plugin.app.vault
-      .getFiles()
-      .filter((f) => f.extension === "pdf")
-      .sort((a, b) => b.stat.mtime - a.stat.mtime);
-    const byPath = new Map(files.map((f) => [f.path, f]));
-    const tree = this.buildTree(files);
-
-    // 一行 PDF：复选框 + 文件名 + 实时统计
-    const makeRow = (f, depth) => {
-      const row = listEl.createDiv({ cls: "mini-pick-row" });
-      row.setAttribute("data-path", f.path);
-      row.style.paddingLeft = `${6 + depth * 16}px`;
-      row.onclick = (ev) => {
-        if (ev.target.tagName === "INPUT") return;
-        cb.checked = !cb.checked;
-        cb.onchange();
-      };
-      const cb = row.createEl("input", { type: "checkbox" });
-      cb.checked = this.selected.has(f.path);
-      cb.style.cursor = "pointer";
-      cb.onchange = () =>
-        this.toggleFile(byPath.get(f.path), cb.checked, rerender);
-      row.createSpan({
-        cls: "mini-pick-name",
-        text: f.name,
-        attr: { title: f.path },
-      });
-      const statSpan = row.createSpan({ cls: "mini-pick-stat" });
-      this.updateRowStat(f.path, statSpan);
-    };
-
-    // 一行文件夹：▸/▾ 折叠 + 名称 + 全选复选框（n/m 已选）
-    const makeDirRow = (node, depth) => {
-      const all = this.collectPdfs(node, []);
-      const selN = all.filter((f) => this.selected.has(f.path)).length;
-      const row = listEl.createDiv({ cls: "mini-pick-row" });
-      row.style.paddingLeft = `${6 + depth * 16}px`;
-      const open = this.openDirs.has(node.path);
-      const arrow = row.createSpan({ cls: "mini-pick-name" });
-      arrow.style.flex = "1";
-      arrow.setText(`${open ? "▾" : "▸"} ${node.name} (${selN}/${all.length})`);
-      arrow.style.cursor = "pointer";
-      arrow.onclick = () => {
-        if (open) this.openDirs.delete(node.path);
-        else this.openDirs.add(node.path);
-        rerender();
-      };
-      const cb = row.createEl("input", { type: "checkbox" });
-      cb.style.cursor = "pointer";
-      cb.checked = selN > 0 && selN === all.length;
-      cb.indeterminate = selN > 0 && selN < all.length;
-      cb.onchange = () => {
-        for (const f of all) {
-          if (cb.checked) {
-            if (!this.selected.has(f.path)) this.toggleFile(f, true, null);
-          } else this.toggleFile(f, false, null);
-        }
-        setTimeout(rerender, 50);
-      };
-    };
-
-    const renderTree = () => {
-      listEl.empty();
-      const walk = (node, depth) => {
-        for (const d of [...node.dirs.values()].sort((a, b) =>
-          a.name.localeCompare(b.name)
-        )) {
-          makeDirRow(d, depth);
-          if (this.openDirs.has(d.path)) walk(d, depth + 1);
-        }
-        for (const f of node.pdfs) makeRow(f, depth);
-      };
-      walk(tree, 0);
-    };
-
-    // 搜索时退平铺（带完整路径），空关键字回到目录树
-    const renderFlat = (kwRaw) => {
-      listEl.empty();
-      const kw = (kwRaw || "").toLowerCase();
-      for (const f of files) {
-        if (kw && !f.path.toLowerCase().includes(kw)) continue;
-        makeRow(f, 0);
-        const lastRow = listEl.lastElementChild;
-        lastRow.querySelector(".mini-pick-name").setText(f.path);
-      }
-    };
-
-    const rerender = () => {
-      const kw = search.value.trim();
-      if (kw) renderFlat(kw);
-      else renderTree();
-      this.refreshAll();
-    };
-    rerender();
-    search.oninput = () => rerender();
-
-    this.updateSummary(null);
-    const btns = contentEl.createDiv();
-    btns.style.cssText =
-      "display:flex;gap:8px;margin-top:12px;justify-content:flex-end;";
-    this.startBtn = btns.createEl("button", {
-      text: t("full.start"),
-      cls: "mod-cta",
-    });
-    this.startBtn.disabled = true;
-    this.startBtn.onclick = () => {
-      if (!this.plugin.ensureLlmForFull()) return;
-      const jobs = Array.from(this.selected)
-        .map((p) => ({
-          file: byPath.get(p),
-          blocks: this.blocksCache.get(p) || null,
-          doc: this.docsCache.get(p) || null, // 已解析的文档直接带走，开跑免二次解析
-        }))
-        .filter((j) => j.file);
-      if (!jobs.length) return;
-      this.close();
-      void this.plugin
-        .runPickedTranslate(jobs)
-        .catch((error) => this.plugin.reportFullTranslateFailure(error));
-    };
-    const cancelBtn = btns.createEl("button", { text: t("common.cancel") });
-    cancelBtn.onclick = () => this.close();
-  }
-
-  toggleFile(file, checked, rerenderRow) {
-    const p = file.path;
-    if (!checked) {
-      this.selected.delete(p);
-      this.refreshAll();
-      return;
-    }
-    this.selected.add(p);
-    if (
-      !this.statsCache.has(p) &&
-      !this.pending.has(p) &&
-      !this.failed.has(p)
-    ) {
-      // 第一次勾选：懒解析统计（串行队列），完成后行内与底部汇总实时更新
-      this.pending.add(p);
-      this.refreshAll();
-      this.chain = this.chain.then(async () => {
-        try {
-          const { doc } = await getPdfDocForFile(this.plugin, file);
-          this.docsCache.set(p, doc); // 开跑时直接复用，省一次解析（启动提速）
-          const r = await extractDocBlocks(doc);
-          let chars = 0;
-          for (const b of r.blocks) chars += b.text.length;
-          if (!chars) throw new Error(t("full.no_text_layer"));
-          this.blocksCache.set(p, r.blocks);
-          this.statsCache.set(p, {
-            pages: doc.numPages,
-            chars,
-            blocksN: r.blocks.length,
-            batchesN: groupIntoBatches(r.blocks).length,
-            tokensEst: estTokens(chars),
-          });
-        } catch (e) {
-          console.warn("[mini-translator] 解析失败:", file.path, e);
-          const msg = String(e?.message || e || t("common.unknown_error")).slice(0, 60);
-          this.failed.set(
-            p,
-            /无文本层|No text layer/i.test(e.message || "")
-              ? t("full.scanned_no_text")
-              : t("full.parse_failed", { message: msg })
-          );
-          this.selected.delete(p); // 解析失败的文件不允许参与翻译
-          if (rerenderRow) rerenderRow();
-        } finally {
-          this.pending.delete(p);
-          this.refreshAll();
-        }
-      });
-      return;
-    }
-    this.refreshAll();
-  }
-
-  updateRowStat(path, span) {
-    if (!span) return;
-    if (this.failed.has(path)) {
-      span.setText(this.failed.get(path));
-      return;
-    }
-    if (this.pending.has(path)) {
-      span.setText(t("full.calculating"));
-      return;
-    }
-    const s = this.statsCache.get(path);
-    if (!s) return;
-    span.setText(t("full.file_stats", {
-      pages: s.pages,
-      blocks: s.blocksN,
-      tokens: fmtTok(s.tokensEst),
-    }));
-  }
-
-  refreshAll() {
-    if (this.listElRef) {
-      for (const row of this.listElRef.querySelectorAll(".mini-pick-row")) {
-        this.updateRowStat(
-          row.getAttribute("data-path"),
-          row.querySelector(".mini-pick-stat")
-        );
-      }
-    }
-    this.updateSummary();
-  }
-
-  updateSummary() {
-    if (!this.summaryEl) return;
-    let n = 0;
-    let tokens = 0;
-    let reqs = 0;
-    let chars = 0;
-    for (const p of this.selected) {
-      const s = this.statsCache.get(p);
-      if (s) {
-        n++;
-        tokens += s.tokensEst;
-        reqs += s.batchesN;
-        chars += s.chars;
-      }
-    }
-    const prof = findProfile(this.plugin.settings.primarySource);
-    const parts = [t("full.selected_files", { count: n })];
-    parts.push(t("full.characters", { count: fmtTok(chars) }));
-    parts.push(`≈${fmtTok(tokens)} tokens`);
-    parts.push(t("full.request_count", { count: reqs }));
-    if (n)
-      parts.push(
-        prof
-          ? t("full.estimate_minutes", {
-              minutes: Math.max(1, Math.ceil((reqs * 3.5) / 60)),
-            })
-          : t("full.estimate_under_minute")
-      );
-    const pend = Array.from(this.pending).filter((p) => this.selected.has(p));
-    if (pend.length) {
-      parts.push(t("full.calculating_count", { count: pend.length }));
-    }
-    this.summaryEl.setText(parts.join("　·　"));
-    if (this.startBtn) this.startBtn.disabled = n === 0 || pend.length > 0;
-  }
-
-  onClose() {
-    this.contentEl.empty();
-  }
-}
+const { FullTranslateModal, FilePickTranslateModal } = PDF_TRANSLATION_UI.createTranslationModals({
+  Modal, t, parsePageRange, pageRangeErrorMessage: PAGE_RANGES.pageRangeErrorMessage,
+  createPdfFilePicker: PDF_FILE_PICKER.createPdfFilePicker, extractDocBlocks, getPdfDocForFile,
+  fmtTok, languageQualityNotice,
+});
 
 class LLMConfigModal extends Modal {
   constructor(app, plugin) {
@@ -7821,46 +7473,20 @@ module.exports = class MiniTranslator extends Plugin {
     }
     const doc = loc.doc;
     const file = loc.leaf.view.file;
-    new Notice(t("full.extracting_notice"), 3000);
-    let blocks = [];
-    try {
-      const r = await extractDocBlocks(doc, (i, n) =>
-        this.setFullTranslateStatus(`MT · ${phaseName("提取文本")} ${i}/${n}`)
-      );
-      blocks = r.blocks;
-    } catch (e) {
-      this.clearFullTranslateStatus();
-      new Notice(t("full.extract_failed", { message: e.message }), 8000);
-      return;
-    }
-    this.clearFullTranslateStatus();
-    if (this.ftCancel) {
-      this.resetFtCancel();
-      new Notice(t("full.cancelled"), 2000);
-      return;
-    }
-    const transChars = blocks.reduce((n, b) => n + b.text.length, 0);
-    if (!transChars) {
-      new Notice(t("full.no_extractable_text"), 8000);
-      return;
-    }
-    const info = this.buildDocInfo(
-      file || { name: t("full.unknown_file"), path: "" },
-      blocks
-    );
-    info.doc = doc;
-    info.blocks = blocks;
+    const info = { fileName: file?.name || t("full.unknown_file"), pdfPath: file?.path || "", doc };
     new FullTranslateModal(this.app, this, info).open();
   }
 
   // 从块结构构建任务信息（当前 PDF 与多选弹窗共用）：批次划分、token/耗时估算
   // （全文翻译为大模型源专用，全部块都进管线）
-  buildDocInfo(file, blocks) {
+  buildDocInfo(file, blocks, options = {}) {
     const batches = groupIntoBatches(blocks);
     let chars = 0;
     for (const b of blocks) chars += b.text.length;
     const prof = findProfile(this.settings.primarySource);
-    const pages = blocks.reduce((m, b) => Math.max(m, b.page), 0);
+    const pages = options.totalPages || blocks.reduce((m, b) => Math.max(m, b.continuedThroughPage ?? b.page), 0);
+    const selectedPages = normalizePageNumbers(options.selectedPages, pages);
+    const pageRangeLabel = selectedPages.length < pages ? formatPageRanges(selectedPages) : "";
     const sourceLanguage = safeLanguageCode(this.settings.sourceLanguage, true);
     const targetLanguage = safeLanguageCode(this.settings.targetLanguage);
     return {
@@ -7868,6 +7494,8 @@ module.exports = class MiniTranslator extends Plugin {
       pdfPath: file.path,
       pages,
       chars,
+      selectedPages,
+      pageRangeLabel,
       transN: blocks.length,
       chunks: batches.length,
       sourceLanguage,
@@ -7934,74 +7562,90 @@ module.exports = class MiniTranslator extends Plugin {
 
   // 多选批量全文翻译：逐份顺序执行，中途可取消，只打开最后一份结果
   async runPickedTranslate(jobs) {
-    if (!this.ensureLlmForFull()) return;
     let ok = 0;
     let failed = 0;
     let batchCancelled = false;
-    this.ensureProg();
-    for (let i = 0; i < jobs.length; i++) {
-      if (this.ftCancel) break;
-      const job = jobs[i];
-      const tag = `[${i + 1}/${jobs.length}] ${job.file.name}`;
-      try {
+    try {
+      if (!this.ensureLlmForFull()) return;
+      this.ensureProg();
+      for (let i = 0; i < jobs.length; i++) {
+        if (this.ftCancel) { batchCancelled = true; break; }
+        const job = jobs[i];
         let doc = job.doc || null;
-        let blocks = job.blocks || null;
-        if (!doc) doc = (await getPdfDocForFile(this, job.file)).doc;
-        if (!blocks) {
-          const r = await extractDocBlocks(doc, (p, n) =>
-            this.progUpdate({ fileTag: tag, phase: "提取文本", done: p, total: n })
+        let owned = !!job.ownedDoc;
+        const tag = `[${i + 1}/${jobs.length}] ${job.file.name}`;
+        try {
+          let blocks = job.blocks || null;
+          if (!doc) { const loaded = await getPdfDocForFile(this, job.file); doc = loaded.doc; owned = loaded.owned; }
+          const pageNumbers = normalizePageNumbers(job.pageNumbers, doc.numPages);
+          if (!blocks) {
+            const r = await extractDocBlocks(doc, (p, n) =>
+              this.progUpdate({ fileTag: tag, phase: "提取文本", done: p, total: n }), pageNumbers, () => this.ftCancel
+            );
+            blocks = r.blocks;
+          }
+          const info = this.buildDocInfo(job.file, blocks, { totalPages: doc.numPages, selectedPages: pageNumbers });
+          if (!info.chars)
+            throw new Error(t("full.scanned_requires_ocr"));
+          info.doc = doc;
+          info.blocks = blocks;
+          info.openResult = i === jobs.length - 1; // 批量时只打开最后一个结果
+          info.batchLabel = `${i + 1}/${jobs.length}`;
+          const cancelled = await this.runFullTranslate(info);
+          if (cancelled) {
+            batchCancelled = true;
+            new Notice(t("full.batch_cancelled"), 3000);
+            break;
+          }
+          ok++;
+        } catch (e) {
+          if (this.ftCancel) { batchCancelled = true; break; }
+          failed++;
+          this.reportFullTranslateFailure(
+            e,
+            { fileName: job.file.name },
+            { batch: true }
           );
-          blocks = r.blocks;
+        } finally {
+          if (owned && doc) { try { await doc.destroy?.(); } catch (_) {} }
+          job.ownedDoc = false;
         }
-        const info = this.buildDocInfo(job.file, blocks);
-        if (!info.chars)
-          throw new Error(t("full.scanned_requires_ocr"));
-        info.doc = doc;
-        info.blocks = blocks;
-        info.openResult = i === jobs.length - 1; // 批量时只打开最后一个结果
-        info.batchLabel = `${i + 1}/${jobs.length}`;
-        const cancelled = await this.runFullTranslate(info);
-        if (cancelled) {
-          batchCancelled = true;
-          new Notice(t("full.batch_cancelled"), 3000);
-          break;
-        }
-        ok++;
-      } catch (e) {
-        failed++;
-        this.reportFullTranslateFailure(
-          e,
-          { fileName: job.file.name },
-          { batch: true }
-        );
       }
+      this.endProg();
+      if (jobs.length > 1)
+        new Notice(
+          t("full.batch_finished", {
+            ok,
+            failed,
+            cancelled: batchCancelled ? t("full.batch_remainder_cancelled") : "",
+          }),
+          6000
+        );
+    } finally {
+      for (const job of jobs) if (job.ownedDoc && job.doc) {
+        try { await job.doc.destroy?.(); } catch (_) {} job.ownedDoc = false;
+      }
+      this.resetFtCancel();
     }
-    this.endProg();
-    if (jobs.length > 1)
-      new Notice(
-        t("full.batch_finished", {
-          ok,
-          failed,
-          cancelled: batchCancelled ? t("full.batch_remainder_cancelled") : "",
-        }),
-        6000
-      );
-    this.resetFtCancel();
   }
 
   async runFullTranslate(info) {
+    const selectedPages = normalizePageNumbers(info.selectedPages, info.doc?.numPages || info.pages);
+    if (!validateBlockPages(info.blocks, selectedPages)) throw new Error(t("pages.invalid_blocks"));
+    const rangeLabel = selectedPages.length < (info.doc?.numPages || info.pages) ? formatPageRanges(selectedPages) : "";
+    const suffix = rangeLabel ? t(rangeLabel.length > 48 ? "pages.filename_short" : "pages.filename", { range: rangeLabel, count: selectedPages.length }) : "";
     const base = info.fileName.replace(/\.pdf$/i, "");
     const dir = info.pdfPath.includes("/")
       ? info.pdfPath.slice(0, info.pdfPath.lastIndexOf("/"))
       : "";
     const join = (name) => `${dir ? dir + "/" : ""}${name}`;
-    let path = join(`${base}·翻译.md`);
+    let path = join(`${base}·翻译${suffix}.md`);
     for (let n = 2; await this.app.vault.adapter.exists(path); n++) {
-      path = join(`${base}·翻译 ${n}.md`);
+      path = join(`${base}·翻译${suffix} ${n}.md`);
     }
-    let htmlPath = join(`${base}·翻译.html`);
+    let htmlPath = join(`${base}·翻译${suffix}.html`);
     for (let n = 2; await this.app.vault.adapter.exists(htmlPath); n++) {
-      htmlPath = join(`${base}·翻译 ${n}.html`);
+      htmlPath = join(`${base}·翻译${suffix} ${n}.html`);
     }
     const htmlName = htmlPath.split("/").pop();
     this.resetFtCancel();
@@ -8037,7 +7681,7 @@ module.exports = class MiniTranslator extends Plugin {
     if (info.doc && !wasCancelled) {
       try {
         figureRegions = await detectRasterFigures(this, info.doc, (i, n) =>
-          this.progUpdate({ fileTag, phase: "检测含图页", done: i, total: n })
+          this.progUpdate({ fileTag, phase: "检测含图页", done: i, total: n }), selectedPages
         );
       } catch (e) {
         console.warn("[mini-translator] PDF 图片识别失败:", e);
@@ -8054,7 +7698,7 @@ module.exports = class MiniTranslator extends Plugin {
     const captionPages = info.blocks
       .filter((b) => /^(?:figure|table)-caption$/.test(b.kind || ""))
       .map((b) => b.page);
-    const figurePages = [...new Set([...figureRegions.keys(), ...captionPages])].sort(
+    const figurePages = [...new Set([...figureRegions.keys(), ...captionPages])].filter(p => selectedPages.includes(p)).sort(
       (a, b) => a - b
     );
     if (
@@ -8069,7 +7713,7 @@ module.exports = class MiniTranslator extends Plugin {
           1.5,
           0.9,
           (i, n) => this.progUpdate({ fileTag, phase: "渲染页面", done: i, total: n }),
-          this.settings.fullHtml ? null : figurePages
+          this.settings.fullHtml ? selectedPages : figurePages
         );
       } catch (e) {
         pageImgs = [];
@@ -8127,12 +7771,11 @@ module.exports = class MiniTranslator extends Plugin {
       blocksByPage.get(b.page).push(i);
     });
 
-    const totalPages = info.doc?.numPages || info.pages;
     const figureAssetCount = [...figureAssetsByPage.values()].reduce(
       (sum, assets) => sum + assets.length,
       0
     );
-    const resultTitle = t("full.result_title", { name: base });
+    const resultTitle = rangeLabel ? t("pages.result_title", { name: base, range: rangeLabel }) : t("full.result_title", { name: base });
     let md =
       "---\n" +
       `title: "${resultTitle}"\n` +
@@ -8141,6 +7784,7 @@ module.exports = class MiniTranslator extends Plugin {
       "  - mini-translator-full-translation\n" +
       `  - mini-translator-script-${languageInfo(info.targetLanguage).script}\n` +
       `source_file: "${info.pdfPath}"\n` +
+      `source_pages: ${JSON.stringify(selectedPages)}\n` +
       `source_language: "${info.sourceLanguage}"\n` +
       `target_language: "${info.targetLanguage}"\n` +
       `translated_with: "${info.source}"\n` +
@@ -8164,7 +7808,7 @@ module.exports = class MiniTranslator extends Plugin {
 
     let failures = [];
     let doneBlocks = 0;
-    for (let p = 1; p <= totalPages; p++) {
+    for (const p of selectedPages) {
       md += `\n## ${t("full.page_heading", { page: p })}\n\n`;
       const idxs = blocksByPage.get(p) || [];
       const figures = figureAssetsByPage.get(p) || [];
@@ -8211,7 +7855,7 @@ module.exports = class MiniTranslator extends Plugin {
       )}\n`;
     }
     md += `\n---\n\n*${t("full.summary", {
-      pages: totalPages,
+      pages: selectedPages.length,
       done: doneBlocks,
       total: info.transN,
       figures: figureAssetCount,
@@ -8235,12 +7879,11 @@ module.exports = class MiniTranslator extends Plugin {
     let htmlWritten = false;
     if (this.settings.fullHtml && pageImgs.some(Boolean)) {
       try {
-        const pages = pageImgs.map((img, pi2) => {
-          if (!img) throw new Error(t("full.page_render_missing", {
-            page: pi2 + 1,
-          }));
+        const pages = selectedPages.map(pageNo => {
+          const img = pageImgs[pageNo - 1];
+          if (!img) throw new Error(t("full.page_render_missing", { page: pageNo }));
           const blks = [];
-          for (const gi of blocksByPage.get(pi2 + 1) || []) {
+          for (const gi of blocksByPage.get(pageNo) || []) {
             const b = info.blocks[gi];
             const res = results[gi] || { en: "", zh: "" };
             const bad = !res.zh || isFailedFullBlock(res);
@@ -8256,7 +7899,7 @@ module.exports = class MiniTranslator extends Plugin {
               ),
             });
           }
-          return { img: img.dataUrl, blocks: blks };
+          return { number: pageNo, img: img.dataUrl, blocks: blks };
         });
         const html = buildReplicaHtml(
           {

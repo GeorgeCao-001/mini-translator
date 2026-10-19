@@ -10,6 +10,12 @@ Mini Translator is a desktop-only Obsidian plugin for translating selected text,
 > [!NOTE]
 > The plugin interface includes English and Simplified Chinese. **Interface language** defaults to **Auto**, which follows Obsidian's language; it can also be selected explicitly in Mini Translator settings.
 
+### Choose PDFs and pages
+
+The full-document confirmation window defaults to **all pages** and also accepts physical PDF ranges such as `1-3, 7, 10-12` (not printed page labels). The batch chooser offers a Vault folder tree, name/path search, Shift multi-selection, folder selection, and a persistent selected-file basket. Set an independent range for each selected PDF; leave its field empty for all pages. Selection and analysis updates preserve list scroll and focused inputs. Folder expansion and tree scroll survive reopening while the plugin remains loaded.
+
+Estimates are recalculated for the selected pages before Start is enabled. Only selected pages are extracted and translated; consecutive selected pages retain paragraph continuation, but separate ranges are never joined or put in the same translation batch. Source-page images and comparison HTML are limited to the selection and retain original PDF page numbers. Partial translations have separate filenames and `source_pages` metadata. Selecting all pages keeps the existing output naming. No OCR is added; empty/scanned selections show an error.
+
 ## Highlights
 
 - **Selection translation** in Markdown, reading views, and PDFs. The popup stays near the real text selection, avoids covering it, and can be resized manually.

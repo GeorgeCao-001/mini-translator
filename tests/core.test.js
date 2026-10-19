@@ -35,6 +35,7 @@ const fs = require("fs");
 const vm = require("vm");
 const src = fs.readFileSync(nodePath.join(PROJECT_ROOT, "main.js"), "utf8");
 const sourceRequire = (request) =>
+  ["./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(request) ? require(nodePath.join(PROJECT_ROOT, request)) :
   request === "./src/i18n.js"
     ? require(nodePath.join(PROJECT_ROOT, "src", "i18n.js"))
     : request === "./src/model-config.js"
@@ -498,6 +499,7 @@ const sandbox2 = {
   Blob,
   URL: { createObjectURL: () => "blob:test" },
   require: (r) =>
+      ["./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(r) ? require(nodePath.join(PROJECT_ROOT, r)) :
     r === "./src/i18n.js"
       ? require(nodePath.join(PROJECT_ROOT, "src", "i18n.js"))
       : r === "./src/model-config.js"

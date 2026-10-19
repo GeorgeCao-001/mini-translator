@@ -32,11 +32,16 @@ run("Source ordering syntax", process.execPath, ["--check", "src/source-order.js
 run("Draggable source picker syntax", process.execPath, ["--check", "src/source-picker.js"]);
 run("Selection context menu syntax", process.execPath, ["--check", "src/selection-menu.js"]);
 run("Popup font syntax", process.execPath, ["--check", "src/popup-font.js"]);
+for (const name of ["page-ranges", "pdf-file-picker", "pdf-translation-ui"]) {
+  run("PDF selection module syntax: " + name, process.execPath, ["--check", "src/" + name + ".js"]);
+}
+run("PDF range and picker tests", process.execPath, ["tests/pdf-selection.test.js"]);
 run("Build script syntax", process.execPath, ["--check", "scripts/build-release.js"]);
 run("PDF hardening syntax", process.execPath, ["--check", "scripts/pdfjs-hardening.js"]);
 run("Release test syntax", process.execPath, ["--check", "scripts/test-release.js"]);
 run("PDF runtime test syntax", process.execPath, ["--check", "scripts/test-pdf-runtime.js"]);
 run("Browser PDF security test syntax", process.execPath, ["--check", "tests/manual/check-pdf-security-browser.js"]);
+run("PDF picker layout test syntax", process.execPath, ["--check", "tests/manual/check-pdf-picker-browser.js"]);
 run("Browser driver syntax", process.execPath, ["--check", "tests/helpers/chromium-page.js"]);
 run("Core tests", process.execPath, ["tests/core.test.js"]);
 run("Localization tests", process.execPath, ["tests/i18n.test.js"]);
@@ -51,6 +56,7 @@ run("PDF hardening security tests", process.execPath, ["tests/pdfjs-hardening.te
 run("Release build", process.execPath, ["scripts/build-release.js"]);
 run("Bundled selection context menu tests", process.execPath, ["tests/selection-menu.test.js", "dist/main.js"]);
 run("Bundled popup font tests", process.execPath, ["tests/popup-font.test.js", "dist/main.js"]);
+run("Bundled PDF range and picker tests", process.execPath, ["tests/pdf-selection.test.js", "dist/main.js"]);
 const first = hashes();
 run("Deterministic rebuild", process.execPath, ["scripts/build-release.js"]);
 const second = hashes();

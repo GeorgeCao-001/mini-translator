@@ -4,6 +4,18 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ## [Unreleased]
 
+### Added
+
+- Added physical PDF page-range selection for the current document and each file in a batch (`1-3, 7, 10-12`). Only selected pages enter extraction, translation, figure-page preservation, and comparison HTML; outputs retain original page numbers and use distinct range-specific names.
+- Added a stable Vault PDF chooser with folder checkboxes, name/path search, Shift selection, selected-file basket, per-file ranges, inline errors/retry, and a fixed start/cancel footer. Checkbox and analysis updates do not rebuild the list or range inputs. Folder expansion and tree scroll are remembered while the plugin remains loaded.
+
+### Fixed
+
+- Fixed collapsed/search/selected-only PDF rows remaining visible because the flex-row CSS overrode `hidden`. Added higher-specificity component-scoped hidden rules and computed-visibility browser regressions for collapse, expansion, selected-only, search intersections and deselection.
+
+- Re-estimate selected-page text/tokens before enabling Start; reject invalid, reversed, out-of-bounds and textless ranges without calling providers. Keep range gaps out of cross-page continuation and batching.
+- Cancel stale picker analysis on range changes/close; release plugin-owned PDF documents without destroying open Obsidian viewers. No dependencies added; existing popup and sidebar typography is unchanged.
+
 ## [1.0.3] - 2026-10-14
 
 ### Added

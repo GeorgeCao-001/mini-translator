@@ -7,7 +7,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function runChromiumPage(browser, url, profile) {
+async function runChromiumPage(browser, url, profile, viewport = null) {
   const child = spawn(browser, [
     "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
     "--disable-background-networking", "--disable-extensions", "--allow-file-access-from-files",
@@ -59,6 +59,7 @@ async function runChromiumPage(browser, url, profile) {
       socket.send(JSON.stringify({ id, method, params }));
     });
     await send("Page.enable");
+    if (viewport) await send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
     await send("Page.navigate", { url });
     // This expression tolerates navigation not having committed yet; then
     // wait for the asynchronous browser fixture to replace its pending result.
