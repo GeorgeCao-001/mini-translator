@@ -73,6 +73,8 @@ function buildRuntime() {
   const selectionMenu = buildCommonJsModule("src/selection-menu.js");
   const popupFont = buildCommonJsModule("src/popup-font.js");
   const popupLock = buildCommonJsModule("src/popup-lock.js");
+  const typography = buildCommonJsModule("src/typography.js");
+  const typographyUi = buildCommonJsModule("src/typography-settings.js");
   const pageRanges = buildCommonJsModule("src/page-ranges.js");
   const pdfFilePicker = buildCommonJsModule("src/pdf-file-picker.js");
   const pdfTranslationUi = buildCommonJsModule("src/pdf-translation-ui.js");
@@ -120,10 +122,12 @@ ${pdf}
   const selectionMenu = ${selectionMenu};
   const popupFont = ${popupFont};
   const popupLock = ${popupLock};
+  const typography = ${typography};
+  const typographyUi = ${typographyUi};
   const pageRanges = ${pageRanges};
   const pdfFilePicker = ${pdfFilePicker};
   const pdfTranslationUi = ${pdfTranslationUi};
-  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, sourceOrder, sourcePicker, selectionMenu, popupFont, popupLock, pageRanges, pdfFilePicker, pdfTranslationUi });
+  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, sourceOrder, sourcePicker, selectionMenu, popupFont, popupLock, typography, typographyUi, pageRanges, pdfFilePicker, pdfTranslationUi });
 })();`;
 }
 
@@ -154,7 +158,8 @@ function main() {
   if (source.split(runtimeMarker).length !== 2) {
     throw new Error("main.js 必须且只能包含一个发布运行时注入标记");
   }
-  const bundled = source.replace(runtimeMarker, buildRuntime());
+  // Preserve embedded module text verbatim, including literal dollar sequences.
+  const bundled = source.replace(runtimeMarker, () => buildRuntime());
   if (/Mini Translator v3|\[mini-translator\] v3/.test(bundled)) {
     throw new Error("发布 main.js 中仍包含旧的内部版本信息");
   }

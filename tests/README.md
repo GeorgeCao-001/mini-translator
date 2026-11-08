@@ -18,6 +18,8 @@ node tests/pdf-selection.test.js
 node tests/popup-lock.test.js
 # Optional isolated layout check after building (existing Chrome only; no live Vault or screenshots):
 node tests/manual/check-popup-lock-browser.js "path/to/chrome"
+node tests/manual/check-typography-browser.js "path/to/chrome"
+node tests/typography.test.js
 node tests/popup-font.test.js
 node tests/regressions.test.js
 node tests/pdfjs-hardening.test.js
@@ -33,6 +35,7 @@ node tests/pdfjs-hardening.test.js
 | `config-ui.test.js` | API configuration visibility, draft creation, validation, cancellation, retry, duplicate prevention, draggable source picker controls, and one-row sidebar selector layout |
 | `selection-menu.test.js` | Editor/reading/PDF menu scope, selection snapshots, localization, duplicate prevention, unloading, immediate manual popup/paint-before-request timing, cached results, cancellation and separate automatic dwell; also runs against `dist/main.js` |
 | `popup-lock.test.js` | Real popup lock lifecycle, outside single/double clicks before/after translation, Escape and Close overrides, in-place selection replacement with stable shell/geometry, pending/cached/manual/automatic paths, stale success/error suppression, unlock/reset/cleanup, accessible icon labels and no settings writes; source and bundle |
+| `typography.test.js` | Independent surfaces/roles, legacy migration, all numeric/style fields, local-font/color validation, bidirectional copying, reset/presets, math-safe paragraph presentation, live popup/sidebar updates, queued/retryable persistence and localized native controls; source and bundle |
 | `popup-font.test.js` | Font normalization, source/target hierarchy, fixed versus resize scaling, native-size geometry, scale persistence, content/viewport-clamp isolation and actual popup resize callbacks; also runs against `dist/main.js` |
 | `pdf-selection.test.js` | Physical-page range parsing, stable folder/search/Shift selection, independent per-file ranges, stale/closed analysis, PDF ownership, page-limited extraction/requests and Markdown/HTML original-page numbering; source and bundle |
 | `regressions.test.js` | Truncated LLM responses, batch parsing, and cross-page continuation regressions |
@@ -89,3 +92,5 @@ Optional isolated layout check (existing browser, no Obsidian access, screenshot
 Covers Chinese/English, 1100/480px widths, fixed-footer visibility, overflow, list/input identity, caret and scroll retention.
 
 The picker layout check also asserts **computed display and rendered client rectangles**, not just the `hidden` property: initial collapse, expansion, re-collapse, selected-only, search intersections and removing the last selected file. This reproduces the flex/CSS cascade regression without opening Obsidian.
+
+Advanced typography browser coverage includes the approved two-pane design in light/dark and Chinese/English, narrow-window stacking, keyboard tabs, collapsed sections, preview/input identity, opacity percentages, resize-policy isolation, visible fixed footer and failed-save retry. It uses generated fixtures in an isolated headless browser, never a live Obsidian window or personal Vault data.

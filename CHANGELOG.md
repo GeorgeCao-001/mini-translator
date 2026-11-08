@@ -4,7 +4,15 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ## [Unreleased]
 
+### Changed
+
+- Font/paragraph and additional typography options now expand independently, including both open together; switching text roles or surfaces retains each section's state while the dialog is open.
+
+- Redesigned the advanced typography dialog from the approved Figma proposal: compact source/target tabs, left-side native controls, independent right-side sample preview, collapsible additional options, contextual save retry and a quiet one-shot sync action. Added native opacity percentages and resize-policy switching without changing stored styles or translation behavior.
+
 ### Added
+
+- Added independent advanced typography for popup/sidebar and source/target text, with local fonts, validated spacing controls, colors, emphasis, previews, presets, reset and bidirectional one-shot copying. Legacy popup sizes and opt-in resize scaling remain compatible. Genuine blank-line paragraphs have presentation wrappers; math and copied/request text stay untouched. No dependencies or version change.
 
 - Added a per-popup lock button beside Copy and Close. Locked popups ignore outside clicks/double-clicks, including during translation; Escape, Close and explicit cancellation still work. New selections update that same locked popup without changing its position, size or lock state; stale responses cannot overwrite newer results. Closing it resets the lock and no configuration is saved.
 
@@ -12,6 +20,8 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 - Added a stable Vault PDF chooser with folder checkboxes, name/path search, Shift selection, selected-file basket, per-file ranges, inline errors/retry, and a fixed start/cancel footer. Checkbox and analysis updates do not rebuild the list or range inputs. Folder expansion and tree scroll are remembered while the plugin remains loaded.
 
 ### Fixed
+
+- Preserve literal dollar sequences when injecting the bundled runtime; display-math sample delimiters now remain identical in source and release builds. Third-party inputs are unchanged.
 
 - Fixed collapsed/search/selected-only PDF rows remaining visible because the flex-row CSS overrode `hidden`. Added higher-specificity component-scoped hidden rules and computed-visibility browser regressions for collapse, expansion, selected-only, search intersections and deselection.
 

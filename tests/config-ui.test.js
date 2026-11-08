@@ -118,6 +118,7 @@ const obsidian = {
 const sandbox = {
   module: { exports: {} },
   require: (name) => {
+    if (["./src/typography.js", "./src/typography-settings.js"].includes(name)) return require(path.join(__dirname, "..", name));
     if (name === "obsidian") return obsidian;
     if (name === "./src/i18n.js") return require(path.join(__dirname, "..", "src", "i18n.js"));
     if (name === "./src/model-config.js") return require(path.join(__dirname, "..", "src", "model-config.js"));

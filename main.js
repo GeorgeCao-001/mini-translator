@@ -77,6 +77,9 @@ const { parsePageRange, formatPageRanges, normalizePageNumbers, validateBlockPag
 const POPUP_LOCK = BUNDLED_RUNTIME?.popupLock || require("./src/popup-lock.js");
 const { createPopupLockControl, resetPopupContent } = POPUP_LOCK;
 
+const TYPOGRAPHY = BUNDLED_RUNTIME?.typography || require("./src/typography.js");
+const TYPOGRAPHY_UI = BUNDLED_RUNTIME?.typographyUi || require("./src/typography-settings.js");
+
 const WORD_RE = /^[a-zA-Z][a-zA-Z'’]*$/;
 const VIEW_TYPE = "mini-translator-view";
 const UA =
@@ -1849,6 +1852,10 @@ function renderRichText(container, text) {
 
 // ---------- 双语成对渲染：原文行弱化，译文行正常，人读的对照排版 ----------
 // 无论原文还是译文、无论来自哪个源，展示前统一过一遍排版处理
+function renderTranslationText(container, text, dictionary = false) {
+  TYPOGRAPHY.renderParagraphs(container, text, { renderRichText, mathPattern: MATH_RE, dictionary });
+}
+
 function renderPairsTo(el, pairs) {
   el.empty();
   el.addClass("mini-flow");
@@ -1861,14 +1868,14 @@ function renderPairsTo(el, pairs) {
     });
     const sourceEl = el.createDiv({ cls: "mini-en-line mini-source-line" });
     applyLanguageAttrs(sourceEl, p.detectedLanguage || sourceLanguage, sourceText);
-    renderRichText(sourceEl, sourceText);
+    renderTranslationText(sourceEl, sourceText);
     const targetEl = el.createDiv({
       cls: p.dict
         ? "mini-dict-line mini-target-line"
         : "mini-zh-line mini-target-line",
     });
     applyLanguageAttrs(targetEl, targetLanguage, targetText);
-    renderRichText(targetEl, targetText);
+    renderTranslationText(targetEl, targetText, !!p.dict);
   }
 }
 
@@ -4877,6 +4884,7 @@ class MiniTranslatorView extends ItemView {
       new FilePickTranslateModal(this.app, this.plugin).open();
 
     this.flowEl = this.contentEl.createDiv({ cls: "mini-flow" });
+    TYPOGRAPHY.applyTypography(this.flowEl, this.plugin.settings, "sidebar");
     this.metaEl = this.contentEl.createDiv({ cls: "mini-meta" });
 
     // 翻译历史：默认收起（不常驻），点时钟小图标展开；
@@ -4932,6 +4940,7 @@ class MiniTranslatorView extends ItemView {
     this.metaEl.show();
     this.copyBtn.show();
     renderPairsTo(this.flowEl, pairs);
+    TYPOGRAPHY.applyTypography(this.flowEl, this.plugin.settings, "sidebar");
     const from = pairs[0]?.sourceLanguage || this.plugin.settings.sourceLanguage;
     const to = pairs[0]?.targetLanguage || this.plugin.settings.targetLanguage;
     const detected = pairs.find((p) => p.detectedLanguage)?.detectedLanguage || "";
@@ -4966,6 +4975,7 @@ class MiniTranslatorView extends ItemView {
   }
   // 每次同步重建选项，确保设置页/管理弹窗里的改动立即反映到面板
   syncSource() {
+    TYPOGRAPHY.applyTypography(this.flowEl, this.plugin.settings, "sidebar");
     this.sourceDropdown?.sync();
     this.dictDropdown?.sync();
     if (this.sourceLanguageDropdown) {
@@ -5081,6 +5091,14 @@ class MiniTranslatorView extends ItemView {
     this.unsubSources = null;
   }
 }
+
+const TypographyModal = TYPOGRAPHY_UI.createTypographyModalClass({
+  Modal, typography: TYPOGRAPHY, t, setIcon,
+  renderPreview: (el) => renderPairsTo(el, [{
+    en: t("typography.preview_source"), zh: t("typography.preview_target"),
+    sourceLanguage: "en", targetLanguage: "zh-Hans",
+  }]),
+});
 
 // ---------- 设置页 ----------
 class MiniTranslatorSettingTab extends PluginSettingTab {
@@ -5309,6 +5327,15 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
     addPopupFontSettings(containerEl, {
       Setting, plugin: this.plugin, t, refreshPopup: refreshOpenPopupLimits,
     });
+    new Setting(containerEl)
+      .setName(t("typography.title"))
+      .setDesc(t("typography.scope_note"))
+      .addButton(button => button.setButtonText(t("typography.open")).onClick(() => {
+        const scroll = containerEl.scrollTop;
+        new TypographyModal(this.app, this.plugin, "popup", () => {
+          this.display(); containerEl.scrollTop = scroll;
+        }).open();
+      }));
     let setCustomSizeVisibility = () => {};
     new Setting(containerEl)
       .setName(t("settings.popup_limit"))
@@ -5621,6 +5648,9 @@ module.exports = class MiniTranslator extends Plugin {
       POPUP_CUSTOM_HEIGHT_MAX_PX
     );
     this.settings.rememberPopupSize = !!this.settings.rememberPopupSize;
+    this.settings.typography = TYPOGRAPHY.readTypography(storedSettings);
+    this.settings.popupSourceFontSize = this.settings.typography.popup.source.fontSize;
+    this.settings.popupTargetFontSize = this.settings.typography.popup.target.fontSize;
     this.settings.popupSourceFontSize = normalizePopupFontSize(this.settings.popupSourceFontSize);
     this.settings.popupTargetFontSize = normalizePopupFontSize(this.settings.popupTargetFontSize);
     this.settings.popupFontFollowResize = !!this.settings.popupFontFollowResize;
@@ -5918,6 +5948,14 @@ module.exports = class MiniTranslator extends Plugin {
     this.cancelAutoTranslate();
     closeActiveSourcePicker();
     SOURCE_SYNC_LISTENERS.clear(); // 禁用插件时清空中枢订阅
+  }
+
+  refreshTypography() {
+    if (this.popupEl) this._placePopup(this.popupEl, this.lastPopupAnchor, { lock: true });
+    const leaves = this.app?.workspace?.getLeavesOfType?.(VIEW_TYPE) || [];
+    for (const view of new Set([this.panelView, ...leaves.map(leaf => leaf.view)])) {
+      if (view?.flowEl) TYPOGRAPHY.applyTypography(view.flowEl, this.settings, "sidebar");
+    }
   }
 
   // 设置/配置变更后通知面板立即刷新（选项重建 + 当前值同步），并清空翻译缓存
@@ -6331,6 +6369,7 @@ module.exports = class MiniTranslator extends Plugin {
     el.style.setProperty?.("--mini-popup-target-font-size", font.target);
     el.dataset.fontScale = String(font.scale);
     if (this.popupBodyEl && el.contains(this.popupBodyEl)) {
+      TYPOGRAPHY.applyTypography(this.popupBodyEl, this.settings, "popup");
       this.popupBodyEl.style.maxHeight = `${
         this._popupUserResized || this._popupRetained
           ? metrics.manualBodyMaxHeight
@@ -6766,7 +6805,7 @@ module.exports = class MiniTranslator extends Plugin {
       const sourceLanguage = item.sourceLanguage || this.settings.sourceLanguage || "auto";
       const sourceText = formatTextForLanguage(item.en || "", sourceLanguage);
       applyLanguageAttrs(en, item.detectedLanguage || sourceLanguage, sourceText);
-      renderRichText(en, sourceText);
+      renderTranslationText(en, sourceText);
 
       const zh = document.createElement("div");
       const waiting = item.waiting !== false;
@@ -6846,11 +6885,12 @@ module.exports = class MiniTranslator extends Plugin {
     zhEl.replaceChildren();
     applyLanguageAttrs(zhEl, nextPair.targetLanguage, nextPair.zh);
     applyLanguageAttrs(slot.enEl, nextPair.detectedLanguage || nextPair.sourceLanguage, nextPair.en);
-    renderRichText(
+    renderTranslationText(
       zhEl,
       formatTextForLanguage(nextPair.zh, nextPair.targetLanguage, {
         dictionary: nextPair.dict,
-      })
+      }),
+      nextPair.dict
     );
     this._refreshPopupText();
     if (via) {

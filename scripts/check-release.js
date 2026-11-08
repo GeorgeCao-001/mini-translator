@@ -33,6 +33,8 @@ run("Draggable source picker syntax", process.execPath, ["--check", "src/source-
 run("Selection context menu syntax", process.execPath, ["--check", "src/selection-menu.js"]);
 run("Popup lock syntax", process.execPath, ["--check", "src/popup-lock.js"]);
 run("Popup lock test syntax", process.execPath, ["--check", "tests/popup-lock.test.js"]);
+for (const name of ["typography", "typography-settings"]) run("Advanced typography syntax", process.execPath, ["--check", "src/" + name + ".js"]);
+run("Advanced typography tests", process.execPath, ["tests/typography.test.js"]);
 run("Popup font syntax", process.execPath, ["--check", "src/popup-font.js"]);
 for (const name of ["page-ranges", "pdf-file-picker", "pdf-translation-ui"]) {
   run("PDF selection module syntax: " + name, process.execPath, ["--check", "src/" + name + ".js"]);
@@ -44,6 +46,7 @@ run("Release test syntax", process.execPath, ["--check", "scripts/test-release.j
 run("PDF runtime test syntax", process.execPath, ["--check", "scripts/test-pdf-runtime.js"]);
 run("Browser PDF security test syntax", process.execPath, ["--check", "tests/manual/check-pdf-security-browser.js"]);
 run("PDF picker layout test syntax", process.execPath, ["--check", "tests/manual/check-pdf-picker-browser.js"]);
+run("Advanced typography layout test syntax", process.execPath, ["--check", "tests/manual/check-typography-browser.js"]);
 run("Popup lock layout test syntax", process.execPath, ["--check", "tests/manual/check-popup-lock-browser.js"]);
 run("Browser driver syntax", process.execPath, ["--check", "tests/helpers/chromium-page.js"]);
 run("Core tests", process.execPath, ["tests/core.test.js"]);
@@ -62,6 +65,7 @@ run("Bundled selection context menu tests", process.execPath, ["tests/selection-
 run("Bundled popup font tests", process.execPath, ["tests/popup-font.test.js", "dist/main.js"]);
 run("Bundled PDF range and picker tests", process.execPath, ["tests/pdf-selection.test.js", "dist/main.js"]);
 run("Bundled popup lock tests", process.execPath, ["tests/popup-lock.test.js", "dist/main.js"]);
+run("Bundled advanced typography tests", process.execPath, ["tests/typography.test.js", "dist/main.js"]);
 const first = hashes();
 run("Deterministic rebuild", process.execPath, ["scripts/build-release.js"]);
 const second = hashes();

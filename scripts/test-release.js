@@ -187,6 +187,7 @@ if (runtime.popupFont?.popupFontStyles({ popupTargetFontSize: 20 }).target !== "
 if (typeof runtime.popupLock?.createPopupLockControl !== "function") {
   throw new Error("Release lacks the popup lock control");
 }
+if (typeof runtime.typography?.applyTypography !== "function" || typeof runtime.typographyUi?.createTypographyModalClass !== "function") throw new Error("Release lacks advanced typography");
 if (runtime.pageRanges?.parsePageRange("2,4", 5).label !== "2, 4" ||
     typeof runtime.pdfFilePicker?.createPdfFilePicker !== "function" ||
     typeof runtime.pdfTranslationUi?.createTranslationModals !== "function") {
