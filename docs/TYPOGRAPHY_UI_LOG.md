@@ -38,3 +38,10 @@
 - Final validation PASS: full release check and deterministic build, 27 typography tests on source and bundle respectively, 8 isolated typography browser combinations, and 4 genuine PDF render cases through Blob Worker and blocked-Worker fallback. Current Vault assets match the tested dist files.
 - No obvious hard-coded token/private-key patterns found in candidate files. data.json, generated dist assets, local screenshots and temp profiles are excluded from this commit. No newly introduced high-risk operation was found; this is a scoped diff review and regression validation, not a complete formal security audit.
 - User requested a Git checkpoint: commit locally using the existing George_Cao identity; no co-author trailer, push, history rewrite, version bump or Release.
+
+## 2026-11-08 · Prepare 1.0.4 and push main
+
+- User authorized pushing the current work to the remote and preparing v1.0.4. Updated manifest/compatibility mapping, promoted the existing Unreleased changes to a dated 1.0.4 entry, and added bilingual release notes and exact-tag/asset guidance.
+- Minimum Obsidian version stays 1.13.7. No runtime code, dependencies, permissions, third-party code, credentials or existing user settings changed in this preparation step.
+- Push is limited to main; no tag or GitHub Release is created automatically. Existing CI only runs checks with read permissions.
+- Validation PASS for 1.0.4: complete release check, all source/bundle tests, embedded PDF parse and security checks, deterministic rebuild, and diff whitespace validation. JS/CSS asset hashes match the previously audited build; only the installation manifest changes version. Prior isolated browser validations remain applicable to the identical runtime. Prepared a normal fast-forward main push without publishing a tag or Release.

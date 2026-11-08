@@ -4,6 +4,8 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-08
+
 ### Changed
 
 - Font/paragraph and additional typography options now expand independently, including both open together; switching text roles or surfaces retains each section's state while the dialog is open.
@@ -12,7 +14,7 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ### Added
 
-- Added independent advanced typography for popup/sidebar and source/target text, with local fonts, validated spacing controls, colors, emphasis, previews, presets, reset and bidirectional one-shot copying. Legacy popup sizes and opt-in resize scaling remain compatible. Genuine blank-line paragraphs have presentation wrappers; math and copied/request text stay untouched. No dependencies or version change.
+- Added independent advanced typography for popup/sidebar and source/target text, with local fonts, validated spacing controls, colors, emphasis, previews, presets, reset and bidirectional one-shot copying. Legacy popup sizes and opt-in resize scaling remain compatible. Genuine blank-line paragraphs have presentation wrappers; math and copied/request text stay untouched. No new dependencies.
 
 - Added a per-popup lock button beside Copy and Close. Locked popups ignore outside clicks/double-clicks, including during translation; Escape, Close and explicit cancellation still work. New selections update that same locked popup without changing its position, size or lock state; stale responses cannot overwrite newer results. Closing it resets the lock and no configuration is saved.
 
@@ -26,7 +28,7 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 - Fixed collapsed/search/selected-only PDF rows remaining visible because the flex-row CSS overrode `hidden`. Added higher-specificity component-scoped hidden rules and computed-visibility browser regressions for collapse, expansion, selected-only, search intersections and deselection.
 
 - Re-estimate selected-page text/tokens before enabling Start; reject invalid, reversed, out-of-bounds and textless ranges without calling providers. Keep range gaps out of cross-page continuation and batching.
-- Cancel stale picker analysis on range changes/close; release plugin-owned PDF documents without destroying open Obsidian viewers. No dependencies added; existing popup and sidebar typography is unchanged.
+- Cancel stale picker analysis on range changes/close; release plugin-owned PDF documents without destroying open Obsidian viewers. No dependencies added; existing default popup and sidebar typography is retained unless explicitly customized.
 
 ## [1.0.3] - 2026-10-14
 
