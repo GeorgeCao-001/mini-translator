@@ -12,13 +12,15 @@ class Element {
   constructor() {
     this.style = { setProperty(name, value) { this[name] = value; } };
     this.dataset = {}; this.children = []; this.events = new Map(); this.isConnected = true;
-    this.classList = { add() {}, contains: () => false };
+    this.classList = { add() {}, remove() {}, contains: () => false };
     this.box = { width: 320, height: 200 };
   }
   appendChild(child) { child.parent?.children.splice(child.parent.children.indexOf(child), 1); child.parent = this; this.children.push(child); return child; }
   createDiv() { return this.appendChild(new Element()); }
+  createEl(tag, options = {}) { const e = this.createDiv(); e.tagName = tag.toUpperCase(); e.className = options.cls || ""; return e; }
   createSpan(options = {}) { const child = this.createDiv(); child.textContent = options.text || ""; return child; }
-  addClass() {} setAttribute() {} setText(text) { this.textContent = text; }
+  replaceChildren(...children) { this.children = []; this.textContent = ""; for (const child of children) this.appendChild(child); }
+  addClass() {} setAttribute() {} setText(text) { this.replaceChildren(); this.textContent = text; }
   addEventListener(name, fn) { this.events.set(name, fn); }
   removeEventListener(name, fn) { if (this.events.get(name) === fn) this.events.delete(name); }
   contains(node) { return this === node || this.children.some((child) => child.contains(node)); }
@@ -45,7 +47,7 @@ const window = {
 const document = { body: new Element(), documentElement: {}, addEventListener() {}, removeEventListener() {} };
 const sandbox = { window, document, module: { exports: {} }, console, setTimeout, clearTimeout,
   require(name) {
-    if (name === "obsidian") return new Proxy({}, { get: () => class {} });
+    if (name === "obsidian") return new Proxy({}, { get: (_target, key) => key === "setIcon" ? () => {} : class {} });
     if (name.startsWith("./src/")) return require(path.join(root, name));
     throw new Error("Unexpected popup-font test dependency: " + name);
   },

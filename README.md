@@ -21,6 +21,7 @@ Estimates are recalculated for the selected pages before Start is enabled. Only 
 - **Selection translation** in Markdown, reading views, and PDFs. The popup stays near the real text selection, avoids covering it, and can be resized manually.
 - **Sentence and paragraph modes**. Sentence mode keeps bilingual alignment; paragraph mode preserves more context.
 - **Selection context menu**. Right-click selected text in an editor, reading view, or PDF and choose **Translate selected text**; it uses paragraph mode and preserves the existing menu actions.
+- **Popup lock**. Toggle the lock icon at the top right to keep the current popup open while taking notes. Outside clicks and double-clicks no longer dismiss it; **Escape** and **×** still close it. Selecting new text updates the same locked popup, preserving its position and size; late responses cannot overwrite the newer selection. Closing it clears the lock; a newly opened popup starts unlocked.
 - **Popup font controls**. Set source and translation/dictionary font sizes independently (10–40 px), or leave them empty to follow Obsidian. Optionally scale text when manually resizing the popup; automatic layout changes do not change the text scale.
 - **Multilingual input and output**. Source language can be detected automatically, with more than 70 target-language options and layout handling for CJK and RTL scripts.
 - **Bilingual interface**. Settings, commands, popups, the sidebar, configuration dialogs, progress UI, notices, and generated comparison controls are available in English and Simplified Chinese.

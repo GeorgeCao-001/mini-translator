@@ -6,6 +6,8 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ### Added
 
+- Added a per-popup lock button beside Copy and Close. Locked popups ignore outside clicks/double-clicks, including during translation; Escape, Close and explicit cancellation still work. New selections update that same locked popup without changing its position, size or lock state; stale responses cannot overwrite newer results. Closing it resets the lock and no configuration is saved.
+
 - Added physical PDF page-range selection for the current document and each file in a batch (`1-3, 7, 10-12`). Only selected pages enter extraction, translation, figure-page preservation, and comparison HTML; outputs retain original page numbers and use distinct range-specific names.
 - Added a stable Vault PDF chooser with folder checkboxes, name/path search, Shift selection, selected-file basket, per-file ranges, inline errors/retry, and a fixed start/cancel footer. Checkbox and analysis updates do not rebuild the list or range inputs. Folder expansion and tree scroll are remembered while the plugin remains loaded.
 

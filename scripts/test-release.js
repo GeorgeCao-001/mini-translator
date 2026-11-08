@@ -184,6 +184,9 @@ if (typeof runtime.selectionMenu?.registerSelectionTranslationMenu !== "function
 if (runtime.popupFont?.popupFontStyles({ popupTargetFontSize: 20 }).target !== "20px") {
   throw new Error("发布构建没有正确注入悬浮窗字号模块");
 }
+if (typeof runtime.popupLock?.createPopupLockControl !== "function") {
+  throw new Error("Release lacks the popup lock control");
+}
 if (runtime.pageRanges?.parsePageRange("2,4", 5).label !== "2, 4" ||
     typeof runtime.pdfFilePicker?.createPdfFilePicker !== "function" ||
     typeof runtime.pdfTranslationUi?.createTranslationModals !== "function") {

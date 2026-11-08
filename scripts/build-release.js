@@ -72,6 +72,7 @@ function buildRuntime() {
   const sourcePicker = buildCommonJsModule("src/source-picker.js");
   const selectionMenu = buildCommonJsModule("src/selection-menu.js");
   const popupFont = buildCommonJsModule("src/popup-font.js");
+  const popupLock = buildCommonJsModule("src/popup-lock.js");
   const pageRanges = buildCommonJsModule("src/page-ranges.js");
   const pdfFilePicker = buildCommonJsModule("src/pdf-file-picker.js");
   const pdfTranslationUi = buildCommonJsModule("src/pdf-translation-ui.js");
@@ -118,10 +119,11 @@ ${pdf}
   const sourcePicker = ${sourcePicker};
   const selectionMenu = ${selectionMenu};
   const popupFont = ${popupFont};
+  const popupLock = ${popupLock};
   const pageRanges = ${pageRanges};
   const pdfFilePicker = ${pdfFilePicker};
   const pdfTranslationUi = ${pdfTranslationUi};
-  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, sourceOrder, sourcePicker, selectionMenu, popupFont, pageRanges, pdfFilePicker, pdfTranslationUi });
+  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, sourceOrder, sourcePicker, selectionMenu, popupFont, popupLock, pageRanges, pdfFilePicker, pdfTranslationUi });
 })();`;
 }
 

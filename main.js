@@ -74,6 +74,9 @@ const PDF_FILE_PICKER = BUNDLED_RUNTIME?.pdfFilePicker || require("./src/pdf-fil
 const PDF_TRANSLATION_UI = BUNDLED_RUNTIME?.pdfTranslationUi || require("./src/pdf-translation-ui.js");
 const { parsePageRange, formatPageRanges, normalizePageNumbers, validateBlockPages } = PAGE_RANGES;
 
+const POPUP_LOCK = BUNDLED_RUNTIME?.popupLock || require("./src/popup-lock.js");
+const { createPopupLockControl, resetPopupContent } = POPUP_LOCK;
+
 const WORD_RE = /^[a-zA-Z][a-zA-Z'’]*$/;
 const VIEW_TYPE = "mini-translator-view";
 const UA =
@@ -5877,6 +5880,8 @@ module.exports = class MiniTranslator extends Plugin {
     // 翻译完成后：弹窗外单击即可关闭；此时双击也只关闭，不显示取消提示。
     this.registerDomEvent(document, "dblclick", (e) => {
       if (this.popupEl && this.popupEl.contains(e.target)) return;
+      // A locked popup also ignores outside double-clicks, including while translating.
+      if (this.popupEl && this._popupLocked) return;
       // Double-click also selects a word; do not cancel its translation.
       const selection = e.target?.ownerDocument?.defaultView?.getSelection();
       if (selection && selection.toString().trim()) return;
@@ -6166,7 +6171,8 @@ module.exports = class MiniTranslator extends Plugin {
     const vh = Math.max(1, Number(window.innerHeight) || document.documentElement.clientHeight || 1);
     this._applyPopupSize(el);
     let rect = el.getBoundingClientRect();
-    if (this._popupDragged) {
+    if (this._popupDragged || this._popupRetained) {
+      // Reused locked popups stay at their existing position, just like dragged ones.
       // Preserve the existing drag affordance. A manually moved popup is only kept
       // inside the viewport; automatic above/below placement resumes on next popup.
       const currentLeft = Number.parseFloat(el.style.left);
@@ -6308,7 +6314,7 @@ module.exports = class MiniTranslator extends Plugin {
     this._popupSizeMetrics = metrics;
     el.style.minWidth = `${metrics.minWidth}px`;
     el.style.maxWidth = `${
-      this._popupUserResized ? metrics.resizeMaxWidth : metrics.maxWidth
+      this._popupUserResized || this._popupRetained ? metrics.resizeMaxWidth : metrics.maxWidth
     }px`;
     el.style.maxHeight = `${metrics.manualMaxHeight}px`;
     el.style.setProperty?.("--mini-popup-text-boost", `${metrics.textBoost}px`);
@@ -6326,7 +6332,7 @@ module.exports = class MiniTranslator extends Plugin {
     el.dataset.fontScale = String(font.scale);
     if (this.popupBodyEl && el.contains(this.popupBodyEl)) {
       this.popupBodyEl.style.maxHeight = `${
-        this._popupUserResized
+        this._popupUserResized || this._popupRetained
           ? metrics.manualBodyMaxHeight
           : metrics.bodyMaxHeight
       }px`;
@@ -6426,6 +6432,36 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   showPopup(text, x, y, via, pending, anchor = null) {
+    if (this._popupLocked && this.popupEl?.isConnected && this.popupBodyEl) {
+      // Keep the shell, controls and listeners. Only the translation generation
+      // and body change; late responses from the previous selection are ignored.
+      const el = this.popupEl;
+      const rect = el.getBoundingClientRect();
+      this._popupRunId = (this._popupRunId || 0) + 1;
+      this._popupTranslationDone = false;
+      this.lastPopupText = "";
+      this._cancelPopupStreams();
+      this._popupSlots = [];
+      this._popupSlotBody = null;
+      this._popupRetained = true;
+      // Freeze the visible box, not a previously requested/clipped size. This is
+      // not a manual resize and must not write the remembered-size setting.
+      el.style.width = rect.width + "px";
+      el.style.height = rect.height + "px";
+      this._popupObservedInlineSize = el.style.width + "|" + el.style.height;
+      this.lastPopupPos = { x, y };
+      this.lastPopupAnchor = this._normalizePopupAnchor(x, y, anchor);
+      const label = this.popupHeaderEl?.querySelector("span");
+      if (label) {
+        label.textContent = pending ? t("translation.in_progress")
+          : via ? t("translation.header") + " · " + providerName(via) : "Mini Translator";
+        label.title = "";
+      }
+      if (this.popupCloseBtn) this.popupCloseBtn.title = pending ? t("translation.cancel") : t("common.close");
+      this.pendingLabel = resetPopupContent(this.popupBodyEl, { text, pending, t });
+      this._placePopup(el);
+      return;
+    }
     this.closePopup();
     this.lastPopupText = "";
     // Every popup gets a generation id. A response from a previous selection must not
@@ -6499,6 +6535,11 @@ module.exports = class MiniTranslator extends Plugin {
         new Notice(t("common.copied"), 1500);
       }
     };
+    this.popupLockControl = createPopupLockControl(header, {
+      t, setIcon,
+      onChange: (locked) => { this._popupLocked = locked; },
+    });
+    this.popupLockBtn = this.popupLockControl.buttonEl;
     const closeBtn = header.createSpan({ text: "×" });
     closeBtn.className = "mini-popup-close";
     closeBtn.setAttribute("role", "button");
@@ -6556,19 +6597,7 @@ module.exports = class MiniTranslator extends Plugin {
       overflow: "auto",
     });
     this.popupBodyEl = body;
-    if (pending) {
-      const spin = body.createSpan();
-      spin.style.cssText =
-        "display:inline-block;width:14px;height:14px;border:2px solid var(--background-modifier-border);border-top-color:var(--interactive-accent);border-radius:50%;margin-right:8px;vertical-align:-2px;";
-      spin.animate(
-        [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
-        { duration: 700, iterations: Infinity }
-      );
-      this.pendingLabel = body.createSpan({ text: t("translation.in_progress") });
-      this.pendingLabel.style.color = "var(--text-muted)";
-    } else {
-      body.setText(text);
-    }
+    this.pendingLabel = resetPopupContent(body, { text, pending, t });
     document.body.appendChild(el);
     this.popupEl = el;
     if (rememberedPopupSize) {
@@ -6689,6 +6718,7 @@ module.exports = class MiniTranslator extends Plugin {
       if (
         this.popupEl &&
         !this.popupEl.contains(e.target) &&
+        !this._popupLocked &&
         this._popupTranslationDone
       ) {
         this.closePopup();
@@ -6777,9 +6807,8 @@ module.exports = class MiniTranslator extends Plugin {
         this.settings.sourceLanguage,
         this.settings.targetLanguage
       );
-      if (needsAiOnlyDisclaimer(this.settings.sourceLanguage, this.settings.targetLanguage)) {
-        labelSpan.title = t("language.ai_only_notice");
-      }
+      labelSpan.title = needsAiOnlyDisclaimer(this.settings.sourceLanguage, this.settings.targetLanguage)
+        ? t("language.ai_only_notice") : "";
     }
     this._refreshPopupText();
     this._placePopup(this.popupEl, this.lastPopupAnchor, { lock: true });
@@ -6905,6 +6934,11 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   closePopup() {
+    this.popupLockControl?.destroy();
+    this.popupLockControl = null;
+    this.popupLockBtn = null;
+    this._popupLocked = false;
+    this._popupRetained = false;
     this._popupRunId = (this._popupRunId || 0) + 1;
     if (this._popupRememberTimer != null) {
       window.clearTimeout(this._popupRememberTimer);
