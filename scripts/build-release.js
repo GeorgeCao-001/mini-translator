@@ -69,10 +69,13 @@ function buildRuntime() {
   const i18n = buildCommonJsModule("src/i18n.js");
   const modelConfig = buildCommonJsModule("src/model-config.js");
   const sourceOrder = buildCommonJsModule("src/source-order.js");
+  const deepl = buildCommonJsModule("src/deepl.js");
+  const credentials = buildCommonJsModule("src/credential-storage.js");
   const sourcePicker = buildCommonJsModule("src/source-picker.js");
   const selectionMenu = buildCommonJsModule("src/selection-menu.js");
   const popupFont = buildCommonJsModule("src/popup-font.js");
   const popupLock = buildCommonJsModule("src/popup-lock.js");
+  const popupHistory = buildCommonJsModule("src/popup-history.js");
   const typography = buildCommonJsModule("src/typography.js");
   const typographyUi = buildCommonJsModule("src/typography-settings.js");
   const pageRanges = buildCommonJsModule("src/page-ranges.js");
@@ -118,16 +121,19 @@ ${pdf}
   const i18n = ${i18n};
   const modelConfig = ${modelConfig};
   const sourceOrder = ${sourceOrder};
+  const deepl = ${deepl};
+  const credentials = ${credentials};
   const sourcePicker = ${sourcePicker};
   const selectionMenu = ${selectionMenu};
   const popupFont = ${popupFont};
   const popupLock = ${popupLock};
+  const popupHistory = ${popupHistory};
   const typography = ${typography};
   const typographyUi = ${typographyUi};
   const pageRanges = ${pageRanges};
   const pdfFilePicker = ${pdfFilePicker};
   const pdfTranslationUi = ${pdfTranslationUi};
-  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, sourceOrder, sourcePicker, selectionMenu, popupFont, popupLock, typography, typographyUi, pageRanges, pdfFilePicker, pdfTranslationUi });
+  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, deepl, credentials, sourceOrder, sourcePicker, selectionMenu, popupFont, popupLock, popupHistory, typography, typographyUi, pageRanges, pdfFilePicker, pdfTranslationUi });
 })();`;
 }
 

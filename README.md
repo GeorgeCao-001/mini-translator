@@ -65,14 +65,18 @@ While a selection translation is pending, double-click outside the popup or pres
 
 Under **Mini Translator settings → Selection popup**, the compact **Font size (px)** row contains source and translation numeric inputs with up/down steppers, plus **Resize text** (off by default). Dragging the bottom-right corner with this option enabled scales body text based on both window dimensions; header buttons stay unchanged. **Remember the last popup size** also remembers the text scale. These settings do not change sidebar text or full-PDF output.
 
+**Popup history:** use the title-bar ↑ / ↓ buttons to browse up to five earlier completed translations. The header marks history items, and the return button restores your current translation. If you closed the popup, run **Open recent popup history** from the command palette (or assign a hotkey).
+
 ## Translation and dictionary providers
 
 ### Built-in services
 
-- Translation: Youdao, Volcengine, Tencent TranSmart, Google Translate, Bing Translator / Microsoft Translator, and CNKI Academic Translation.
+- Translation: Youdao, Volcengine, Tencent TranSmart, Google Translate, Bing Translator / Microsoft Translator, CNKI Academic Translation, and DeepL (official API).
 - English dictionaries: Baidu Translate, Youdao Dictionary, and Oxford Learner's Dictionaries.
 
-Some built-in providers use public web endpoints rather than guaranteed developer APIs. Availability may change because of region restrictions, rate limits, login requirements, CAPTCHA challenges, or provider-side changes. If a built-in translation provider fails, Mini Translator may try other compatible built-in providers, which means the same text can be sent to more than one service. User-configured LLM providers do not use that fallback chain.
+**DeepL:** In translation service configuration, select **DeepL (official API)** and select/create your own API key in **Obsidian Keychain**, then choose DeepL as the translation source. Only the secret name is saved in plugin settings; secrets are managed per device by Obsidian. The `:fx` suffix selects the official Free endpoint; other keys use the Pro endpoint. DeepL is excluded from fallback by default; enabling its fallback checkbox is an explicit opt-in to API usage. When selected directly, DeepL errors are shown without sending text to another provider. Your API plan controls charges and data handling (free plans may restrict personal/confidential content); [DeepL terms](https://www.deepl.com/en/pro-license) apply. Full-PDF translation still requires an LLM provider.
+
+Some built-in providers use public web endpoints rather than guaranteed developer APIs. Availability may change because of region restrictions, rate limits, login requirements, CAPTCHA challenges, or provider-side changes. If a built-in translation provider fails, Mini Translator may try other compatible built-in providers, which means the same text can be sent to more than one service. User-configured LLM providers and directly selected DeepL do not use that fallback chain.
 
 Open the translation-source or dictionary-source picker in the sidebar or plugin settings, then **drag rows to reorder them**. The first row is the primary source; clicking a row also makes it primary. Built-in rows have a checkbox controlling whether they can be used as a fallback (the selected source is always tried). LLM profiles are primary-only and never silently fall back to another service. Unsupported built-in translation language pairs are skipped.
 
@@ -112,14 +116,14 @@ Mini Translator has no author-operated proxy, analytics, or client-side telemetr
 
 | Operation | Data and possible destination |
 |---|---|
-| Built-in translation | Selected text and language parameters are sent to Youdao, Volcengine, Tencent, Google, Bing/Microsoft, or CNKI. Automatic fallback can send the same text to several compatible built-in services. |
+| Built-in translation | Selected text and language parameters are sent to Youdao, Volcengine, Tencent, Google, Bing/Microsoft, CNKI, or DeepL (official API, user Keychain secret; fallback opt-in only). Automatic fallback can send the same text to several compatible built-in services. |
 | Dictionary lookup | The queried word is sent to Baidu, Youdao, or Oxford. |
 | LLM translation | System instructions, source text, and language parameters are sent to the configured OpenAI-compatible endpoint. Its API key is used for authentication. |
 | Model discovery | A request is sent to the `/models` route derived from the configured endpoint; the returned IDs replace the profile's discovered model list. |
 | Full-PDF translation | Extracted PDF text blocks are sent to the selected LLM endpoint. The original PDF and page images are not uploaded as vision input. |
 | Comparison HTML | The browser requests MathJax from jsDelivr when the generated HTML file is opened. |
 
-Settings, API keys, tokens, and up to 50 recent translation-history entries are stored **unencrypted** in:
+Plugin settings, plaintext credentials and up to 50 translation-history entries are stored **unencrypted** below. LLM, Azure/Bing and CNKI default to plaintext; use **Secure mode** in their credential settings to select a Keychain secret. After saving, only the secret name remains in that configuration. DeepL always uses Keychain. Switching back requires re-entering the key. Old backups can still contain plaintext, and model exports still include keys for plaintext profiles (but not protected keys or their references):
 
 ```text
 <Vault>/.obsidian/plugins/mini-translator/data.json

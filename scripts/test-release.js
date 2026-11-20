@@ -132,6 +132,8 @@ const releaseCss = fs.readFileSync(path.join(root, "dist", "styles.css"), "utf8"
 const cssWarningPatterns = [
   ["!important", /!important\b/],
   ["text-indent", /\btext-indent\s*:/],
+  ["CSS3 text-decoration longhands", /\b(?:-webkit-)?text-decoration-(?:line|style|color|thickness|skip(?:-ink)?)\s*:/],
+  ["multi-value text-decoration shorthand", /\btext-decoration\s*:[^;{}]*\w \w/],
   ["clip-path", /\b(?:-webkit-)?clip-path\s*:/],
   ["mjx-container type selector", /(^|[,\s>+~])mjx-container(?=[\s.#[:]|$)/m],
   ["multicolumn declarations", /(?:^|[;{\s])(?:columns|column-(?:gap|count|width|span|fill|rule(?:-color|-style|-width)?))\s*:/m],

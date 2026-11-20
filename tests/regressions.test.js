@@ -29,7 +29,7 @@ const obsidian = {
 const sandbox = {
   module: { exports: {} }, window: {}, document: {}, console,
   require: (name) => {
-    if (["./src/typography.js", "./src/typography-settings.js"].includes(name)) return require(path.join(__dirname, "..", name));
+    if (["./src/credential-storage.js", "./src/deepl.js", "./src/typography.js", "./src/typography-settings.js"].includes(name)) return require(path.join(__dirname, "..", name));
     if (name === "obsidian") return obsidian;
     if (name === "./src/i18n.js") return require(path.join(__dirname, "..", "src", "i18n.js"));
     if (name === "./src/model-config.js") return require(path.join(__dirname, "..", "src", "model-config.js"));
@@ -37,7 +37,7 @@ const sandbox = {
     if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
     if (name === "./src/selection-menu.js") return require(path.join(__dirname, "..", "src", "selection-menu.js"));
     if (name === "./src/popup-font.js") return require(path.join(__dirname, "..", "src", "popup-font.js"));
-    if (["./src/popup-lock.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
+    if (["./src/popup-lock.js", "./src/popup-history.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
     throw new Error("Unexpected dependency in offline regression: " + name);
   },
 };

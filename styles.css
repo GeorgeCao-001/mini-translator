@@ -1875,6 +1875,47 @@ button.mini-source-picker-trigger:focus-visible {
 }
 .mini-translator-popup button.mini-popup-lock svg { width: 16px; height: 16px; }
 
+/* Recent popup history: compact controls that don't shift the body layout. */
+.mini-translator-popup .mini-popup-history-controls {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 22px);
+  direction: ltr;
+  align-items: center;
+  flex-shrink: 0;
+  margin-inline-start: 6px;
+  gap: 1px;
+}
+.mini-translator-popup .mini-popup-history-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+}
+/* Reserve the first slot even while the return button is hidden. */
+.mini-translator-popup .mini-popup-history-controls > button { grid-row: 1; }
+.mini-translator-popup .mini-popup-history-controls .mini-popup-history-current { grid-column: 1; }
+.mini-translator-popup .mini-popup-history-controls .mini-popup-history-older { grid-column: 2; }
+.mini-translator-popup .mini-popup-history-controls .mini-popup-history-newer { grid-column: 3; }
+.mini-translator-popup .mini-popup-history-controls[hidden],
+.mini-translator-popup .mini-popup-history-controls button[hidden] { display: none; }
+.mini-translator-popup .mini-popup-history-controls button:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.mini-translator-popup .mini-popup-history-controls button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+.mini-translator-popup .mini-popup-history-controls button:disabled { opacity: .4; }
+.mini-translator-popup .mini-popup-history-controls svg { width: 15px; height: 15px; }
+
 /* Advanced typography: only explicit overrides, scoped to translation bodies. */
 .mini-typography[data-mini-type-source-font-size="custom"] .mini-source-line { font-size: var(--mini-type-source-font-size); }
 .mini-typography[data-mini-type-source-font-family="custom"] .mini-source-line { font-family: var(--mini-type-source-font-family); }
@@ -1886,7 +1927,7 @@ button.mini-source-picker-trigger:focus-visible {
 .mini-typography[data-mini-type-source-alignment="custom"] .mini-source-line { text-align: var(--mini-type-source-alignment); }
 .mini-typography[data-mini-type-source-weight="custom"] .mini-source-line { font-weight: var(--mini-type-source-weight); }
 .mini-typography[data-mini-type-source-font-style="custom"] .mini-source-line { font-style: var(--mini-type-source-font-style); }
-.mini-typography[data-mini-type-source-decoration="custom"] .mini-source-line { text-decoration-line: var(--mini-type-source-decoration); }
+.mini-typography[data-mini-type-source-decoration="custom"] .mini-source-line { text-decoration: var(--mini-type-source-decoration); }
 .mini-typography[data-mini-type-source-color="custom"] .mini-source-line { color: var(--mini-type-source-color); }
 .mini-typography[data-mini-type-source-background="custom"] .mini-source-line { background-color: var(--mini-type-source-background); }
 .mini-typography[data-mini-type-source-opacity="custom"] .mini-source-line { opacity: var(--mini-type-source-opacity); }
@@ -1900,7 +1941,7 @@ button.mini-source-picker-trigger:focus-visible {
 .mini-typography[data-mini-type-target-alignment="custom"] .mini-target-line { text-align: var(--mini-type-target-alignment); }
 .mini-typography[data-mini-type-target-weight="custom"] .mini-target-line { font-weight: var(--mini-type-target-weight); }
 .mini-typography[data-mini-type-target-font-style="custom"] .mini-target-line { font-style: var(--mini-type-target-font-style); }
-.mini-typography[data-mini-type-target-decoration="custom"] .mini-target-line { text-decoration-line: var(--mini-type-target-decoration); }
+.mini-typography[data-mini-type-target-decoration="custom"] .mini-target-line { text-decoration: var(--mini-type-target-decoration); }
 .mini-typography[data-mini-type-target-color="custom"] .mini-target-line { color: var(--mini-type-target-color); }
 .mini-typography[data-mini-type-target-background="custom"] .mini-target-line { background-color: var(--mini-type-target-background); }
 .mini-typography[data-mini-type-target-opacity="custom"] .mini-target-line { opacity: var(--mini-type-target-opacity); }

@@ -25,6 +25,9 @@ function hashes() {
   });
 }
 
+run("Credential storage tests", process.execPath, ["tests/credential-storage.test.js"]);
+run("DeepL module syntax", process.execPath, ["--check", "src/deepl.js"]);
+run("DeepL provider tests", process.execPath, ["tests/deepl.test.js"]);
 run("Source syntax", process.execPath, ["--check", "main.js"]);
 run("Localization syntax", process.execPath, ["--check", "src/i18n.js"]);
 run("Model configuration syntax", process.execPath, ["--check", "src/model-config.js"]);
@@ -66,6 +69,8 @@ run("Bundled popup font tests", process.execPath, ["tests/popup-font.test.js", "
 run("Bundled PDF range and picker tests", process.execPath, ["tests/pdf-selection.test.js", "dist/main.js"]);
 run("Bundled popup lock tests", process.execPath, ["tests/popup-lock.test.js", "dist/main.js"]);
 run("Bundled advanced typography tests", process.execPath, ["tests/typography.test.js", "dist/main.js"]);
+run("Bundled credential storage tests", process.execPath, ["tests/credential-storage.test.js", "dist/main.js"]);
+run("Bundled DeepL integration tests", process.execPath, ["tests/deepl.test.js", "dist/main.js"]);
 const first = hashes();
 run("Deterministic rebuild", process.execPath, ["scripts/build-release.js"]);
 const second = hashes();

@@ -21,6 +21,7 @@ const {
   PluginSettingTab,
   Setting,
   DropdownComponent,
+  SecretComponent,
   Modal,
   renderMath,
   finishRenderMath,
@@ -36,6 +37,8 @@ const BUNDLED_RUNTIME = null;
 const I18N = BUNDLED_RUNTIME?.i18n || require("./src/i18n.js");
 const MODEL_CONFIG =
   BUNDLED_RUNTIME?.modelConfig || require("./src/model-config.js");
+const DEEPL = BUNDLED_RUNTIME?.deepl || require("./src/deepl.js");
+const CREDENTIALS = BUNDLED_RUNTIME?.credentials || require("./src/credential-storage.js");
 const SOURCE_ORDER =
   BUNDLED_RUNTIME?.sourceOrder || require("./src/source-order.js");
 const SOURCE_PICKER =
@@ -76,6 +79,7 @@ const { parsePageRange, formatPageRanges, normalizePageNumbers, validateBlockPag
 
 const POPUP_LOCK = BUNDLED_RUNTIME?.popupLock || require("./src/popup-lock.js");
 const { createPopupLockControl, resetPopupContent } = POPUP_LOCK;
+const POPUP_HISTORY = BUNDLED_RUNTIME?.popupHistory || require("./src/popup-history.js");
 
 const TYPOGRAPHY = BUNDLED_RUNTIME?.typography || require("./src/typography.js");
 const TYPOGRAPHY_UI = BUNDLED_RUNTIME?.typographyUi || require("./src/typography-settings.js");
@@ -494,6 +498,24 @@ function cached(key, fn) {
     return v;
   });
   return p;
+}
+
+async function requestWithCredential(options, protectedKey) {
+  if (!protectedKey) return requestUrl(options);
+  let response;
+  try {
+    response = await requestUrl({ ...options, throw: false });
+  } catch (_) {
+    throw new Error(t("credential.request_failed"));
+  }
+  if (response.status !== 200) {
+    throw new Error(t("credential.http_failed", { status: Number(response.status) || 0 }));
+  }
+  try {
+    return { status: response.status, json: response.json };
+  } catch (_) {
+    throw new Error(t("credential.invalid_response"));
+  }
 }
 
 function checkStatus(res, label) {
@@ -2048,7 +2070,7 @@ async function dictLookup(word, primary) {
   const prof = findProfile(primary);
   if (prof) {
     if (!prof.url) throw new Error(t("config.url_required"));
-    if (!prof.apiKey) throw new Error(t("config.api_key_required"));
+    if (!CREDENTIALS.hasCredential(prof, "apiKey")) throw new Error(t("config.api_key_required"));
     return { text: await llmRequest(word, prof, DICT_PROMPT), via: prof.name };
   }
   const order = attemptOrder(
@@ -2390,7 +2412,7 @@ function parseBingTranslation(data) {
 }
 
 async function bingTranslateOfficial(text, from, to) {
-  const key = String(PLUGIN_SETTINGS?.bingApiKey || "").trim();
+  const key = await readCredential(PLUGIN_SETTINGS, "bingApiKey");
   if (!key) throw new Error(t("error.bing_key"));
   const endpoint = String(
     PLUGIN_SETTINGS?.bingEndpoint || "https://api.cognitive.microsofttranslator.com"
@@ -2407,12 +2429,12 @@ async function bingTranslateOfficial(text, from, to) {
   };
   const region = String(PLUGIN_SETTINGS?.bingRegion || "").trim();
   if (region) headers["Ocp-Apim-Subscription-Region"] = region;
-  const res = await requestUrl({
+  const res = await requestWithCredential({
     url,
     method: "POST",
     headers,
     body: JSON.stringify([{ Text: text }]),
-  });
+  }, CREDENTIALS.usesKeychain(PLUGIN_SETTINGS, "bingApiKey"));
   checkStatus(res, "Bing");
   return parseBingTranslation(res.json);
 }
@@ -2444,7 +2466,7 @@ async function bingTranslateWeb(text, from, to) {
 }
 
 async function bingTranslate(text, from = "auto", to = "zh-Hans") {
-  const out = PLUGIN_SETTINGS?.bingApiKey
+  const out = CREDENTIALS.hasCredential(PLUGIN_SETTINGS, "bingApiKey")
     ? await bingTranslateOfficial(text, from, to)
     : await bingTranslateWeb(text, from, to);
   out.text = rejectLikelyUnsupportedEcho(text, out.text, from, to, "Bing");
@@ -2481,22 +2503,24 @@ async function cnkiTranslate(text, from = "auto", to = "zh-Hans") {
     origin: "https://dict.cnki.net",
     referer: "https://dict.cnki.net/",
   };
-  const token = String(PLUGIN_SETTINGS?.cnkiToken || "").trim();
-  const authorization = String(PLUGIN_SETTINGS?.cnkiAuthorization || "").trim();
+  const token = await readCredential(PLUGIN_SETTINGS, "cnkiToken");
+  const authorization = await readCredential(PLUGIN_SETTINGS, "cnkiAuthorization");
+  const protectedKey = CREDENTIALS.usesKeychain(PLUGIN_SETTINGS, "cnkiToken") ||
+    CREDENTIALS.usesKeychain(PLUGIN_SETTINGS, "cnkiAuthorization");
   if (token) headers.Token = token;
   if (authorization) headers.Authorization = authorization;
-  const res = await requestUrl({
+  const res = await requestWithCredential({
     url: "https://dict.cnki.net/fyzs-front-api/translate/literaltranslation",
     method: "POST",
     headers,
     body: JSON.stringify({ words: cnkiEncrypt(text), translateType }),
-  });
+  }, protectedKey);
   checkStatus(res, "CNKI");
   const data = res.json || {};
   if (data.code !== 200) {
     if (data.code === 401) throw new Error(t("error.cnki_login"));
     if (data.code === 1004) throw new Error(t("error.cnki_captcha"));
-    throw new Error(data.msg || t("error.cnki_code", {
+    throw new Error((!protectedKey && data.msg) || t("error.cnki_code", {
       code: data.code ?? t("common.unknown_error"),
     }));
   }
@@ -2510,6 +2534,16 @@ async function cnkiTranslate(text, from = "auto", to = "zh-Hans") {
 
 // ---------- 句子：大模型（OpenAI 兼容 LLM API，端点/Key/模型均可配） ----------
 let PLUGIN_SETTINGS = null;
+let PLUGIN_SECRET_STORAGE = null;
+
+const readCredential = (record, field, storage = PLUGIN_SECRET_STORAGE) =>
+  CREDENTIALS.readCredential(record, field, storage, t);
+
+async function deeplTranslate(text, from = "auto", to = "zh-Hans") {
+  return DEEPL.translate(text, from, to, {
+    settings: PLUGIN_SETTINGS, secretStorage: PLUGIN_SECRET_STORAGE, requestUrl, t,
+  });
+}
 
 function languagePromptName(code, autoText = "自动识别的原文语言") {
   return code === "auto" ? autoText : `${languageInfo(code).label}（${code}）`;
@@ -2624,7 +2658,7 @@ const LLM_PRESETS = [
 ];
 
 // ---------- 模型自动查询：调 OpenAI 兼容的 /models 端点 ----------
-async function fetchModels(baseUrl, apiKey) {
+async function fetchModels(baseUrl, apiKey, protectedKey = false) {
   if (!String(baseUrl || "").trim()) throw new Error(t("config.url_required"));
   let modelsUrl;
   try {
@@ -2637,7 +2671,7 @@ async function fetchModels(baseUrl, apiKey) {
     "user-agent": UA,
   };
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-  const res = await requestUrl({ url: modelsUrl, headers });
+  const res = await requestWithCredential({ url: modelsUrl, headers }, protectedKey);
   checkStatus(res, providerName("模型查询"));
   const list = extractModelIds(res.json);
   if (list.length === 0) throw new Error(t("error.models_empty"));
@@ -4156,6 +4190,7 @@ class LLMConfigModal extends Modal {
         dd.addOption("llm", t("config.llm_type"));
         dd.addOption("bing", "Bing / Microsoft Translator");
         dd.addOption("cnki", t("config.cnki_type"));
+        dd.addOption("deepl", t("deepl.type"));
         dd.setValue(this.configType).onChange((value) => {
           this.configType = value;
           this.editing = -1;
@@ -4247,24 +4282,42 @@ class LLMConfigModal extends Modal {
       this.render();
     });
   }
+  credentialField(record, field, name, desc, placeholder, creating = false) {
+    const settings = this.plugin.settings;
+    CREDENTIALS.addField({
+      container: this.contentEl, app: this.app, record, field, name, desc, placeholder,
+      Setting, SecretComponent, t, notify: message => new Notice(message, 5000),
+      onSwitch: () => CACHE.clear(),
+      persist: async (patch, oldPlain) => {
+        if (!creating) {
+          if (record !== settings && !settings.llmProfiles.includes(record)) throw new Error("Profile changed");
+          const candidate = record === settings ? { ...settings, ...patch } : {
+            ...settings, llmProfiles: settings.llmProfiles.map(p => p === record ? { ...p, ...patch } : p),
+          };
+          const next = field === "apiKey" ? CREDENTIALS.clearLegacyCopies(candidate, oldPlain) : candidate;
+          await this.plugin.saveData(next);
+          if (field === "apiKey" && oldPlain) {
+            if (!Object.hasOwn(next, "llmApiKey")) delete settings.llmApiKey;
+            if (next.customPresets !== settings.customPresets) settings.customPresets = next.customPresets;
+          }
+        }
+        Object.assign(record, patch);
+      },
+    });
+  }
   renderBuiltinConfig() {
     const c = this.contentEl;
     const settings = this.plugin.settings;
     // 只移动配置表单，保留原字段与请求行为；切换类型不会清空已有凭据。
-    if (this.configType === "bing") {
-      new Setting(c)
-        .setName("Azure Translator Key")
-        .setDesc(t("config.azure_desc"))
-        .addText((text) => {
-          text.inputEl.type = "password";
-          text
-            .setPlaceholder(t("config.azure_placeholder"))
-            .setValue(settings.bingApiKey || "")
-            .onChange(async (value) => {
-              settings.bingApiKey = value.trim();
-              await this.plugin.saveData(settings);
-            });
-        });
+    if (this.configType === "deepl") {
+      DEEPL.addSettings({
+        container: c, app: this.app, settings, Setting, SecretComponent, t,
+        save: next => this.plugin.saveData(next),
+        notify: message => new Notice(message, 5000),
+      });
+    } else if (this.configType === "bing") {
+      this.credentialField(settings, "bingApiKey", "Azure Translator Key",
+        t("config.azure_desc"), t("config.azure_placeholder"));
       new Setting(c)
         .setName(t("config.bing_region"))
         .setDesc(t("config.bing_region_desc"))
@@ -4278,19 +4331,11 @@ class LLMConfigModal extends Modal {
             })
         );
     } else if (this.configType === "cnki") {
-      new Setting(c)
-        .setName("CNKI Token")
-        .setDesc(t("config.cnki_desc"))
-        .addText((text) => {
-          text.inputEl.type = "password";
-          text
-            .setPlaceholder(t("config.cnki_placeholder"))
-            .setValue(settings.cnkiToken || "")
-            .onChange(async (value) => {
-              settings.cnkiToken = value.trim();
-              await this.plugin.saveData(settings);
-            });
-        });
+      this.credentialField(settings, "cnkiToken", "CNKI Token",
+        t("config.cnki_desc"), t("config.cnki_placeholder"));
+      if (CREDENTIALS.hasCredential(settings, "cnkiAuthorization")) {
+        this.credentialField(settings, "cnkiAuthorization", "CNKI Authorization");
+      }
     }
   }
   renderEdit(idx, draft = null) {
@@ -4346,18 +4391,7 @@ class LLMConfigModal extends Modal {
             if (!creating) await this.plugin.saveData(this.plugin.settings);
           })
       );
-    new Setting(c)
-      .setName("API Key")
-      .setDesc(t("config.api_key_desc"))
-      .addText((t) => {
-        t.inputEl.type = "password";
-        t.setPlaceholder("sk-...")
-          .setValue(p.apiKey || "")
-          .onChange(async (v) => {
-            p.apiKey = v.trim();
-            if (!creating) await this.plugin.saveData(this.plugin.settings);
-          });
-      });
+    this.credentialField(p, "apiKey", "API Key", t("config.api_key_desc"), "sk-...", creating);
 
     new Setting(c)
       .setName(t("config.default_model"))
@@ -4383,7 +4417,8 @@ class LLMConfigModal extends Modal {
           b.setButtonText(t("config.querying"));
           if (b.buttonEl) b.buttonEl.disabled = true;
           try {
-            const list2 = await fetchModels(p.url, p.apiKey);
+            const key = await readCredential(p, "apiKey", this.app?.secretStorage);
+            const list2 = await fetchModels(p.url, key, CREDENTIALS.usesKeychain(p, "apiKey"));
             // A successful query is authoritative for this endpoint/key. Do
             // not retain stale preset names or models no longer available to
             // the account. Unlisted compatibility aliases can still be added
@@ -4510,7 +4545,8 @@ class LLMConfigModal extends Modal {
         const saved = {
           name,
           url,
-          apiKey: String(p.apiKey || "").trim(),
+          apiKey: CREDENTIALS.usesKeychain(p, "apiKey") ? "" : String(p.apiKey || "").trim(),
+          ...(CREDENTIALS.usesKeychain(p, "apiKey") ? { apiKeySecret: p.apiKeySecret } : {}),
           models,
           activeModel,
         };
@@ -4618,10 +4654,9 @@ async function llmRequest(
   const model = profile.activeModel || (profile.models && profile.models[0]);
   if (!model) throw new Error(t("config.no_model"));
   const headers = { "content-type": "application/json" };
-  if (String(profile.apiKey || "").trim()) {
-    headers.authorization = `Bearer ${String(profile.apiKey).trim()}`;
-  }
-  const res = await requestUrl({
+  const key = await readCredential(profile, "apiKey");
+  if (key) headers.authorization = `Bearer ${key}`;
+  const res = await requestWithCredential({
     url: profile.url,
     method: "POST",
     headers,
@@ -4637,7 +4672,7 @@ async function llmRequest(
         { role: "user", content: text },
       ],
     }),
-  });
+  }, CREDENTIALS.usesKeychain(profile, "apiKey"));
   checkStatus(res, providerName("大模型"));
   const data = res.json;
   const choice = data?.choices?.[0];
@@ -4668,7 +4703,18 @@ const ENGINES = [
   { name: "谷歌", fn: googleTranslate },
   { name: "Bing", fn: bingTranslate },
   { name: "CNKI", fn: cnkiTranslate },
+  { name: "DeepL", fn: deeplTranslate, optInFallback: true, noFallback: true },
 ];
+
+// Paid API usage is opt-in; adding a provider must not change old fallback
+// choices or begin charging configured accounts without an explicit selection.
+function builtinTranslationFallbacks(settings = PLUGIN_SETTINGS) {
+  const saved = settings?.translationSourceEnabled;
+  return normalizeEnabled(
+    Array.isArray(saved) ? saved : ENGINES.filter(e => !e.optInFallback).map(e => e.name),
+    ENGINES.map(e => e.name)
+  );
+}
 
 // 翻译源下拉选项 = 内置引擎 + 每个大模型配置（配置即源）
 function engineOptions() {
@@ -4713,6 +4759,7 @@ async function translateSentence(
   const { text: safeText, map } = protectMath(text);
   // 若选中的是某个大模型配置，直接用该配置翻译（不回退到免费源，避免隐性切换）
   const prof = findProfile(primary);
+  if (primary === "DeepL" && prof) throw new Error(t("deepl.name_conflict"));
   if (prof) {
     const translated = await llmRequest(
       safeText,
@@ -4727,10 +4774,15 @@ async function translateSentence(
       detectedLanguage: from === "auto" ? inferLayoutLanguage(text) : from,
     };
   }
+  const selected = ENGINES.find(e => e.name === primary);
+  if (selected?.noFallback) {
+    const raw = normalizeEngineResult(await selected.fn(safeText, from, to), from === "auto" ? "" : from);
+    return { text: restoreMath(raw.text, map), via: primary, detectedLanguage: raw.detectedLanguage };
+  }
   const order = attemptOrder(
     primary,
     PLUGIN_SETTINGS?.translationSourceOrder,
-    PLUGIN_SETTINGS?.translationSourceEnabled,
+    builtinTranslationFallbacks(),
     ENGINES.map((e) => e.name)
   );
   const errors = [];
@@ -4910,6 +4962,7 @@ class MiniTranslatorView extends ItemView {
     setIcon(this.histClearBtn, "trash-2");
     this.histClearBtn.onclick = async () => {
       this.plugin.settings.history = [];
+      this.plugin.resetPopupHistory();
       await this.plugin.saveData(this.plugin.settings);
       this.renderHistory();
       new Notice(t("panel.history_cleared"), 1500);
@@ -5232,7 +5285,7 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
         b.setButtonText(t("settings.export")).onClick(() => {
           const data = {
             version: 2,
-            llmProfiles: this.plugin.settings.llmProfiles || [],
+            llmProfiles: (this.plugin.settings.llmProfiles || []).map(CREDENTIALS.portableProfile),
           };
           const blob = new Blob([JSON.stringify(data, null, 2)], {
             type: "application/json",
@@ -5262,14 +5315,19 @@ class MiniTranslatorSettingTab extends PluginSettingTab {
                   (s.llmProfiles || []).map((p) => [p.name, p])
                 );
                 for (const p of parsed.llmProfiles) {
-                  if (p.name) known.set(p.name, p);
+                  if (p?.name && !CREDENTIALS.usesKeychain(known.get(p.name), "apiKey")) {
+                    known.set(p.name, CREDENTIALS.portableProfile(p));
+                  }
                 }
                 s.llmProfiles = Array.from(known.values());
               } else if (parsed.url) {
                 // 兼容早期的单配置格式
-                s.llmProfiles = [
+                const protectedProfiles = (s.llmProfiles || []).filter(p => CREDENTIALS.usesKeychain(p, "apiKey"));
+                const importedName = t("settings.imported_name");
+                s.llmProfiles = protectedProfiles.some(p => p.name === importedName) ? protectedProfiles : [
+                  ...protectedProfiles,
                   {
-                    name: t("settings.imported_name"),
+                    name: importedName,
                     url: parsed.url || "",
                     apiKey: parsed.apiKey || "",
                     models: parsed.model ? [parsed.model] : [],
@@ -5596,6 +5654,7 @@ module.exports = class MiniTranslator extends Plugin {
         bingEndpoint: "https://api.cognitive.microsofttranslator.com",
         cnkiToken: "",
         cnkiAuthorization: "",
+        deeplSecret: "", // Obsidian Keychain reference only; never the API key.
         autoTranslate: false,
         autoTranslateDelay: 2,
         popupMaxSize: "adaptive", // 自动打开尺寸及手动高度上限；手动宽度只受视口限制
@@ -5688,7 +5747,7 @@ module.exports = class MiniTranslator extends Plugin {
       this.settings.translationSourceOrder,
       [...engineNames, ...modelNames.filter((name) => !engineNames.includes(name))]
     );
-    this.settings.translationSourceEnabled = normalizeEnabled(this.settings.translationSourceEnabled, engineNames);
+    this.settings.translationSourceEnabled = builtinTranslationFallbacks(this.settings);
     this.settings.dictionarySourceOrder = normalizeOrder(
       this.settings.dictionarySourceOrder,
       [...dictionaryNames, ...modelNames.filter((name) => !dictionaryNames.includes(name))]
@@ -5696,6 +5755,7 @@ module.exports = class MiniTranslator extends Plugin {
     this.settings.dictionarySourceEnabled = normalizeEnabled(this.settings.dictionarySourceEnabled, dictionaryNames);
     await this.saveData(this.settings);
     PLUGIN_SETTINGS = this.settings;
+    PLUGIN_SECRET_STORAGE = this.app?.secretStorage || null;
 
     this.registerView(VIEW_TYPE, (leaf) => {
       // 自己持有面板实例引用；leaf.view 在新版 Obsidian 里不保证返回插件实例
@@ -5786,6 +5846,11 @@ module.exports = class MiniTranslator extends Plugin {
           new Notice(t("translation.cancelled_selection"), 1500);
         }
       },
+    });
+
+    this.addLocalizedCommand("popup_history.reopen", {
+      id: "open-popup-history",
+      callback: () => this.openPopupHistory(),
     });
 
     this.addLocalizedCommand("command.self_test", {
@@ -6240,7 +6305,7 @@ module.exports = class MiniTranslator extends Plugin {
         ? this._popupPlacement
         : null;
     let placementHeight = rect.height;
-    if (!storedPlacement && options.lock && Array.isArray(this._popupSlots)) {
+    if (!storedPlacement && options.lock && !this._popupHistoryView && Array.isArray(this._popupSlots)) {
       // Before the API returns, estimate each pending translation row from its source
       // row. This chooses the correct side up front instead of first showing a tiny
       // placeholder below and discovering only later that the finished text fits above.
@@ -6317,6 +6382,10 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   _popupContentLength() {
+    if (this._popupHistoryView) {
+      return this._popupHistoryView.entries[this._popupHistoryView.index].pairs
+        .reduce((length, pair) => length + pair.en.length + pair.zh.length, 0);
+    }
     const slots = Array.isArray(this._popupSlots) ? this._popupSlots : [];
     if (slots.length) {
       return slots.reduce((sum, slot) => {
@@ -6471,6 +6540,8 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   showPopup(text, x, y, via, pending, anchor = null) {
+    this._popupHistoryView = null;
+    this._popupCurrentPairs = null;
     if (this._popupLocked && this.popupEl?.isConnected && this.popupBodyEl) {
       // Keep the shell, controls and listeners. Only the translation generation
       // and body change; late responses from the previous selection are ignored.
@@ -6498,6 +6569,7 @@ module.exports = class MiniTranslator extends Plugin {
       }
       if (this.popupCloseBtn) this.popupCloseBtn.title = pending ? t("translation.cancel") : t("common.close");
       this.pendingLabel = resetPopupContent(this.popupBodyEl, { text, pending, t });
+      this.refreshPopupHistoryControls();
       this._placePopup(el);
       return;
     }
@@ -6556,13 +6628,14 @@ module.exports = class MiniTranslator extends Plugin {
       color: "var(--text-muted)",
     });
     this.popupHeaderEl = header;
-    header.createSpan({
+    const title = header.createSpan({
       text: pending
         ? t("translation.in_progress")
         : via
           ? `${t("translation.header")} · ${providerName(via)}`
           : "Mini Translator",
     });
+    title.setAttribute("aria-live", "polite");
     const copyBtn = header.createSpan({ text: t("common.copy") });
     copyBtn.style.cursor = "pointer";
     copyBtn.style.marginLeft = "auto";
@@ -6574,6 +6647,12 @@ module.exports = class MiniTranslator extends Plugin {
         new Notice(t("common.copied"), 1500);
       }
     };
+    this.popupHistoryControl = POPUP_HISTORY.createPopupHistoryControl(header, {
+      t, setIcon,
+      older: () => this.stepPopupHistory(1),
+      newer: () => this.stepPopupHistory(-1),
+      current: () => this.returnFromPopupHistory(),
+    });
     this.popupLockControl = createPopupLockControl(header, {
       t, setIcon,
       onChange: (locked) => { this._popupLocked = locked; },
@@ -6768,6 +6847,112 @@ module.exports = class MiniTranslator extends Plugin {
       if (e.key === "Escape") this.closePopup();
     };
     document.addEventListener("keydown", this._dismissKey);
+  }
+
+  refreshPopupHistoryControls() {
+    if (!this.popupHistoryControl) return;
+    const view = this._popupHistoryView;
+    const count = view ? view.entries.length : this._popupTranslationDone
+      ? POPUP_HISTORY.recentPopupHistory(this.settings.history, this._popupCurrentPairs).length : 0;
+    this.popupHistoryControl.update(count, view?.index, view && !view.current);
+  }
+
+  openPopupHistory() {
+    if (this.popupEl?.isConnected) {
+      if (this._popupHistoryView) return;
+      if (!this._popupTranslationDone) {
+        new Notice(t("popup_history.wait"), 2500);
+        return;
+      }
+      this.stepPopupHistory(1);
+      return;
+    }
+    const entries = POPUP_HISTORY.recentPopupHistory(this.settings.history);
+    if (!entries.length) {
+      new Notice(t("popup_history.empty"), 2500);
+      return;
+    }
+    const x = Math.max(8, Math.round(window.innerWidth * 0.24));
+    const y = Math.max(8, Math.round(window.innerHeight * 0.24));
+    this.showPopup("", x, y, null, false);
+    this._popupTranslationDone = true;
+    this._popupHistoryView = { entries, index: 0, current: null };
+    this.renderPopupHistory();
+  }
+
+  stepPopupHistory(delta) {
+    if (!this.popupEl || !this._popupTranslationDone) return;
+    let view = this._popupHistoryView;
+    if (!view) {
+      if (delta < 0) return;
+      const entries = POPUP_HISTORY.recentPopupHistory(this.settings.history, this._popupCurrentPairs);
+      if (!entries.length) {
+        new Notice(t("popup_history.empty"), 2500);
+        return;
+      }
+      const body = this.popupBodyEl;
+      const title = this.popupHeaderEl.querySelector("span");
+      const current = {
+        nodes: Array.from(body.childNodes), flow: body.classList.contains("mini-flow"),
+        top: body.scrollTop, left: body.scrollLeft,
+        title: title.textContent, tooltip: title.title || "", copy: this.lastPopupText,
+      };
+      view = this._popupHistoryView = { entries, index: 0, current };
+    } else {
+      const next = view.index + delta;
+      if (next < 0 && view.current) {
+        this.returnFromPopupHistory();
+        return;
+      }
+      if (next < 0 || next >= view.entries.length) return;
+      view.index = next;
+    }
+    this.renderPopupHistory();
+  }
+
+  renderPopupHistory() {
+    const view = this._popupHistoryView;
+    const { pairs, via, ts, file, page } = view.entries[view.index];
+    const body = this.popupBodyEl;
+    renderPairsTo(body, pairs);
+    this.lastPopupText = pairs.map(pair => pair.zh).join("\n\n");
+    const title = this.popupHeaderEl.querySelector("span");
+    const position = t("popup_history.position", { index: view.index + 1, count: view.entries.length });
+    title.textContent = [position, via && providerName(via)].filter(Boolean).join(" · ");
+    title.title = [title.textContent, ts && fmtHistTime(ts), file, page && t("popup_history.page", { page })]
+      .filter(Boolean).join(" · ");
+    this.refreshPopupHistoryControls();
+    this._placePopup(this.popupEl, this.lastPopupAnchor, { lock: true });
+    body.scrollTop = 0;
+    body.scrollLeft = 0;
+  }
+
+  returnFromPopupHistory() {
+    const view = this._popupHistoryView;
+    if (!view) return;
+    if (!view.current) {
+      if (view.index !== 0) { view.index = 0; this.renderPopupHistory(); }
+      return;
+    }
+    const { current } = view;
+    this._popupHistoryView = null;
+    const body = this.popupBodyEl;
+    body.replaceChildren(...current.nodes);
+    if (!current.flow) body.classList.remove("mini-flow");
+    const title = this.popupHeaderEl.querySelector("span");
+    title.textContent = current.title;
+    title.title = current.tooltip;
+    this.lastPopupText = current.copy;
+    this.refreshPopupHistoryControls();
+    this._placePopup(this.popupEl, this.lastPopupAnchor, { lock: true });
+    body.scrollTop = current.top;
+    body.scrollLeft = current.left;
+  }
+
+  resetPopupHistory() {
+    if (this._popupHistoryView?.current) this.returnFromPopupHistory();
+    else if (this._popupHistoryView) this.closePopup();
+    this.refreshPopupHistoryControls();
   }
 
   updatePending(text) {
@@ -6970,10 +7155,15 @@ module.exports = class MiniTranslator extends Plugin {
     this.pendingLabel = null;
     this.popupBodyEl.empty();
     this.popupBodyEl.setText(msg);
+    this.lastPopupText = "";
+    this.refreshPopupHistoryControls();
     this._placePopup(this.popupEl);
   }
 
   closePopup() {
+    this._popupHistoryView = null;
+    this._popupCurrentPairs = null;
+    this.popupHistoryControl = null;
     this.popupLockControl?.destroy();
     this.popupLockControl = null;
     this.popupLockBtn = null;
@@ -7396,7 +7586,11 @@ module.exports = class MiniTranslator extends Plugin {
       }
       this.updatePopupPairs(pairs, via);
       // 到这里译文已经完整输出；从现在起弹窗外单击即可关闭，不再视为取消翻译。
-      if (this._popupRunId === popupRunId) this._popupTranslationDone = true;
+      if (this._popupRunId === popupRunId) {
+        this._popupTranslationDone = true;
+        this._popupCurrentPairs = pairs;
+        this.refreshPopupHistoryControls();
+      }
       // 历史记录：附上来源（哪个文件、PDF 第几页 / 笔记名）
       let hFile = "";
       let hPage = null;
@@ -7494,6 +7688,7 @@ module.exports = class MiniTranslator extends Plugin {
         page: page || null,
       });
       if (h.length > 50) h.length = 50;
+      this.refreshPopupHistoryControls();
       await this.saveData(this.settings);
       if (this.panelView) this.panelView.refreshHistoryCount();
     } catch (e) {

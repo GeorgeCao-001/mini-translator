@@ -11,6 +11,7 @@ class Element {
     this.style = { setProperty(name, value) { this[name] = value; } };
     const classes = new Set(); this.classList = { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) };
   }
+  get childNodes() { return this.children; }
   appendChild(child) { child.parent = this; this.children.push(child); return child; }
   createEl(tag, opts = {}) { return this.appendChild(new Element(tag, opts)); }
   createDiv(opts) { return this.createEl("div", opts); } createSpan(opts) { return this.createEl("span", opts); }
@@ -307,6 +308,87 @@ test("closing a reused popup prevents pending success/error from reviving or ove
   }
 });
 
+const shelfPairs = n => [{ en: "Source " + n + ".", zh: "译文 " + n + "。", sourceLanguage: "en", targetLanguage: "zh-Hans" }];
+const shelfHistory = () => Array.from({ length: 9 }, (_, i) => ({ pairs: shelfPairs(i + 1), via: "Offline", file: "Fixture.pdf", page: i + 1, ts: 1 }));
+const tHistory = (i, n) => I18N.t("popup_history.position", { index: i, count: n });
+const getControl = (p, cls) => p.popupHeaderEl.children.find(child => child.className === "mini-popup-history-controls")
+  .children.find(child => child.className === "mini-popup-history-" + cls);
+test("history browses five prior completed results and restores current DOM, scroll and copy text", async () => {
+  const p = fixture();
+  p.settings.history = shelfHistory();
+  p.updatePopupPairs(shelfPairs(1), "Offline");
+  p._popupCurrentPairs = shelfPairs(1);
+  p.refreshPopupHistoryControls();
+  const body = p.popupBodyEl, header = p.popupHeaderEl.querySelector("span"), title = header.textContent;
+  const original = body.children[1];
+  body.scrollTop = 51;
+  getControl(p, "older").click();
+  assert.equal(p._popupHistoryView.entries.length, 5);
+  assert.ok(header.textContent.startsWith(tHistory(1, 5)));
+  assert.match(header.title, /Fixture\.pdf/);
+  assert.equal(p.lastPopupText, shelfPairs(2)[0].zh);
+  await p.popupHeaderEl.children[1].onclick();
+  assert.equal(copied.at(-1), shelfPairs(2)[0].zh);
+  for (let i = 0; i < 7; i++) getControl(p, "older").click();
+  assert.ok(header.textContent.startsWith(tHistory(5, 5)));
+  assert.equal(p.lastPopupText, shelfPairs(6)[0].zh);
+  assert.ok(getControl(p, "older").disabled);
+  getControl(p, "newer").click();
+  assert.equal(p.lastPopupText, shelfPairs(5)[0].zh);
+  getControl(p, "current").click();
+  assert.equal(header.textContent, title);
+  assert.equal(p.lastPopupText, shelfPairs(1)[0].zh);
+  assert.equal(body.children[1], original);
+  assert.equal(body.scrollTop, 51);
+  assert.equal(p.saves, 0);
+  p.closePopup();
+});
+test("history can be reopened after dismissal and returns to newest with no duplicate entry", () => {
+  const p = fixture();
+  p.settings.history = [{ pairs: [] }, ...shelfHistory()];
+  p.closePopup();
+  p.openPopupHistory();
+  assert.equal(p.lastPopupText, shelfPairs(1)[0].zh);
+  assert.ok(p.popupHeaderEl.querySelector("span").textContent.startsWith(tHistory(1, 5)));
+  assert.ok(getControl(p, "newer").disabled);
+  getControl(p, "older").click();
+  getControl(p, "older").click();
+  getControl(p, "current").click();
+  assert.equal(p.lastPopupText, shelfPairs(1)[0].zh);
+  assert.equal(p.settings.history.length, 10);
+  p.settings.history = [];
+  p.resetPopupHistory();
+  assert.equal(p.popupEl, null);
+  const noticesBefore = notices.length;
+  p.openPopupHistory();
+  assert.equal(p.popupEl, null);
+  assert.equal(notices.length, noticesBefore + 1);
+});
+test("pending translations keep the current popup; a new locked selection leaves history mode", async () => {
+  const p = translationFixture(), shell = p.popupEl;
+  p.settings.history = shelfHistory();
+  p._popupTranslationDone = true;
+  p.openPopupHistory();
+  assert.equal(p.lastPopupText, shelfPairs(1)[0].zh);
+  const next = flow(p, "New provisional paragraph.");
+  assert.equal(p.popupEl, shell);
+  assert.equal(p._popupHistoryView, null);
+  p.openPopupHistory();
+  assert.equal(p._popupHistoryView, null);
+  assert.equal(p._popupTranslationDone, false);
+  sandbox.__requests[0].resolve(response("新译文。"));
+  await next;
+  assert.equal(p.lastPopupText, "新译文。");
+  assert.equal(p.historyWrites.length, 1);
+  getControl(p, "older").click();
+  p.settings.history = [];
+  p.resetPopupHistory();
+  assert.equal(p.lastPopupText, "新译文。");
+  assert.equal(p._popupHistoryView, null);
+  assert.equal(p.popupEl, shell);
+  p.closePopup();
+});
+
 (async () => { for (const [name, fn] of tests) { selectedText = ""; await fn(); frames.clear(); console.log("PASS " + name); }
-  console.log(`ALL PASS (${tests.length} popup lock tests; ${path.basename(path.dirname(sourcePath))}/${path.basename(sourcePath)})`);
+  console.log(`ALL PASS (${tests.length} popup lock/history tests; ${path.basename(path.dirname(sourcePath))}/${path.basename(sourcePath)})`);
 })().catch(e => { console.error(e); process.exitCode = 1; });

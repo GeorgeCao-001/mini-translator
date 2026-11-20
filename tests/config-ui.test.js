@@ -67,6 +67,9 @@ class Control {
 class DropdownComponent extends Control {
   constructor(parent) { super(parent, "select"); }
 }
+class SecretComponent extends Control {
+  constructor(app, parent) { super(parent, "select"); this.app = app; }
+}
 class Setting {
   constructor(parent) {
     this.settingEl = parent.createDiv();
@@ -84,6 +87,7 @@ class Setting {
     callback(control);
     return this;
   }
+  addComponent(callback) { this.controls.push(callback(this.controlEl)); return this; }
   addDropdown(callback) { return this.add("select", callback); }
   addText(callback) { return this.add("input", callback); }
   addButton(callback) { return this.add("button", callback); }
@@ -105,7 +109,7 @@ let failModelRequest = false;
 const notices = [];
 const obsidian = {
   Plugin: class {}, ItemView: class {}, MarkdownView: class {},
-  Modal, PluginSettingTab, Setting, DropdownComponent,
+  Modal, PluginSettingTab, Setting, DropdownComponent, SecretComponent,
   setIcon() {},
   Notice: class { constructor(message) { notices.push(message); } },
   requestUrl: async (request) => {
@@ -118,7 +122,7 @@ const obsidian = {
 const sandbox = {
   module: { exports: {} },
   require: (name) => {
-    if (["./src/typography.js", "./src/typography-settings.js"].includes(name)) return require(path.join(__dirname, "..", name));
+    if (["./src/credential-storage.js", "./src/deepl.js", "./src/typography.js", "./src/typography-settings.js"].includes(name)) return require(path.join(__dirname, "..", name));
     if (name === "obsidian") return obsidian;
     if (name === "./src/i18n.js") return require(path.join(__dirname, "..", "src", "i18n.js"));
     if (name === "./src/model-config.js") return require(path.join(__dirname, "..", "src", "model-config.js"));
@@ -126,7 +130,7 @@ const sandbox = {
     if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
     if (name === "./src/selection-menu.js") return require(path.join(__dirname, "..", "src", "selection-menu.js"));
     if (name === "./src/popup-font.js") return require(path.join(__dirname, "..", "src", "popup-font.js"));
-    if (["./src/popup-lock.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
+    if (["./src/popup-lock.js", "./src/popup-history.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
     throw new Error("Unexpected dependency in offline UI test: " + name);
   },
   document: { body: new Element(), createElement: (tag) => new Element(tag) },
@@ -219,7 +223,7 @@ async function test(name, callback) {
     assert.equal(modal.configType, "llm");
     expectFields(modal.contentEl, ["配置类型"]);
     assert.equal(nodes(modal.contentEl).find((n) => n.tagName === "h3").text, "翻译服务配置管理");
-    assert.deepEqual(Object.keys(field(modal.contentEl, "配置类型").options), ["llm", "bing", "cnki"]);
+    assert.deepEqual(Object.keys(field(modal.contentEl, "配置类型").options), ["llm", "bing", "cnki", "deepl"]);
     assert.equal(field(modal.contentEl, "配置类型").element.value, "llm");
     assert.equal(nodes(modal.contentEl).filter((n) => n.type === "password").length, 0);
     const presetOptions = Object.keys(creationPicker(modal.contentEl).options);
@@ -276,6 +280,82 @@ async function test(name, callback) {
     assert.equal(plugin.settings.cnkiToken, "updated-cnki-token");
     assert.equal(plugin.saves.length, 3);
     assert.equal(plugin.settings.bingApiKey, "updated-bing-key");
+  });
+  await test("DeepL uses the existing manager with a secret reference in both UI languages", async () => {
+    const isolated = pluginFixture(), initial = JSON.stringify(isolated.settings);
+    const I = require("../src/i18n.js");
+    try {
+      for (const language of ["zh-CN", "en"]) {
+        I.setUiLanguage(language);
+        const app = { secretStorage: { getSecret() { throw Error("UI must not retrieve raw secrets"); } } };
+        const deepModal = new sandbox.__ui.LLMConfigModal(app, isolated);
+        deepModal.onOpen();
+        await field(deepModal.contentEl, I.t("config.type")).choose("deepl");
+        expectFields(deepModal.contentEl, [I.t("config.type"), I.t("deepl.key_name")]);
+        const secret = field(deepModal.contentEl, I.t("deepl.key_name"));
+        assert.ok(secret instanceof SecretComponent);
+        assert.equal(nodes(deepModal.contentEl).filter(n => n.type === "password").length, 0);
+        if (language === "zh-CN") {
+          assert.equal(JSON.stringify(isolated.settings), initial, "Opening the form does not change settings");
+          await secret.choose("deepl-keychain-name");
+          assert.equal(isolated.settings.deeplSecret, "deepl-keychain-name");
+          assert.equal(isolated.saves[0].deeplSecret, "deepl-keychain-name");
+          assert.equal(isolated.settings.primarySource, "Existing LLM");
+          assert.equal(isolated.settings.cnkiToken, "existing-cnki-token");
+        } else assert.equal(secret.element.value, "deepl-keychain-name");
+        await field(deepModal.contentEl, I.t("config.type")).choose("cnki");
+        assert.equal(isolated.settings.deeplSecret, "deepl-keychain-name");
+        deepModal.onClose();
+      }
+    } finally { I.setUiLanguage("zh-CN"); }
+  });
+  await test("Optional Secure mode commits only after validating the reference and saving settings", async () => {
+    const plugin = pluginFixture();
+    plugin.settings.llmApiKey = "existing-llm-key";
+    const raw = "not-written-to-disk";
+    const app = { secretStorage: { getSecret: id => id === "ref" ? raw : null } };
+    const window = new sandbox.__ui.LLMConfigModal(app, plugin);
+    window.onOpen();
+    await button(window.contentEl, "编辑").click();
+    assert.equal(field(window.contentEl, "API Key").element.value, "existing-llm-key");
+    const text = field(window.contentEl, "API Key");
+    await Promise.all([text.choose("intermediate"), text.choose("existing-llm-key")]);
+    assert.equal(plugin.settings.llmProfiles[0].apiKey, "existing-llm-key");
+    await button(window.contentEl, "安全模式").click();
+    assert.ok(field(window.contentEl, "API Key") instanceof SecretComponent);
+    await field(window.contentEl, "API Key").choose("missing");
+    const save = plugin.saveData;
+    plugin.saveData = async () => { throw Error("offline save failed"); };
+    await field(window.contentEl, "API Key").choose("ref");
+    assert.equal(plugin.settings.llmProfiles[0].apiKey, "existing-llm-key");
+    assert.equal(plugin.settings.llmProfiles[0].apiKeySecret, undefined);
+    plugin.saveData = save;
+    await field(window.contentEl, "API Key").choose("ref");
+    assert.equal(plugin.settings.llmProfiles[0].apiKeySecret, "ref");
+    const stored = JSON.stringify(plugin.saves.at(-1));
+    assert.ok(!stored.includes(raw) && !stored.includes("existing-llm-key"));
+    await button(window.contentEl, "改用明文").click();
+    assert.equal(field(window.contentEl, "API Key").element.value, "");
+    assert.equal(plugin.settings.llmProfiles[0].apiKeySecret, "ref");
+    await field(window.contentEl, "API Key").choose("typed-by-user");
+    await button(window.contentEl, "保存为明文").click();
+    assert.equal(plugin.settings.llmProfiles[0].apiKeySecret, "");
+    assert.equal(plugin.settings.llmProfiles[0].apiKey, "typed-by-user");
+  });
+  await test("Bing and CNKI opt in independently; DeepL has no plaintext option", async () => {
+    const plugin = pluginFixture(), app = { secretStorage: { getSecret: () => "test-value" } };
+    const window = new sandbox.__ui.LLMConfigModal(app, plugin);
+    window.onOpen();
+    for (const [type, label, key] of [["bing", "Azure Translator Key", "bingApiKey"], ["cnki", "CNKI Token", "cnkiToken"]]) {
+      await field(window.contentEl, "配置类型").choose(type);
+      await button(window.contentEl, "安全模式").click();
+      await field(window.contentEl, label).choose(type + "-ref");
+      assert.equal(plugin.settings[key], "");
+      assert.equal(plugin.settings[key + "Secret"], type + "-ref");
+    }
+    assert.equal(plugin.settings.llmProfiles[0].apiKey, "existing-llm-key");
+    await field(window.contentEl, "配置类型").choose("deepl");
+    assert.ok(!nodes(window.contentEl).some(e => e.text === "改用明文" || e.text === "保存为明文"));
   });
   await test("repeated type switching never accumulates forms or changes active source/profiles", async () => {
     for (let i = 0; i < 5; i++) {
