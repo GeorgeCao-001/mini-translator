@@ -35,6 +35,7 @@ run("Source ordering syntax", process.execPath, ["--check", "src/source-order.js
 run("Draggable source picker syntax", process.execPath, ["--check", "src/source-picker.js"]);
 run("Selection context menu syntax", process.execPath, ["--check", "src/selection-menu.js"]);
 run("Popup lock syntax", process.execPath, ["--check", "src/popup-lock.js"]);
+run("Sidebar navigation tests", process.execPath, ["tests/sidebar-navigation.test.js"]);
 run("Sidebar source editor syntax", process.execPath, ["--check", "src/sidebar-source-editor.js"]);
 run("Popup lock test syntax", process.execPath, ["--check", "tests/popup-lock.test.js"]);
 for (const name of ["typography", "typography-settings"]) run("Advanced typography syntax", process.execPath, ["--check", "src/" + name + ".js"]);
@@ -72,6 +73,7 @@ run("Bundled popup lock tests", process.execPath, ["tests/popup-lock.test.js", "
 run("Bundled advanced typography tests", process.execPath, ["tests/typography.test.js", "dist/main.js"]);
 run("Bundled credential storage tests", process.execPath, ["tests/credential-storage.test.js", "dist/main.js"]);
 run("Bundled DeepL integration tests", process.execPath, ["tests/deepl.test.js", "dist/main.js"]);
+run("Bundled sidebar navigation tests", process.execPath, ["tests/sidebar-navigation.test.js", "dist/main.js"]);
 run("Bundled configuration UI tests", process.execPath, ["tests/config-ui.test.js", "dist/main.js"]);
 const first = hashes();
 run("Deterministic rebuild", process.execPath, ["scripts/build-release.js"]);

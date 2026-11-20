@@ -14,6 +14,7 @@ function registerSelectionTranslationMenu(plugin, { Menu, document: doc, t }) {
     return {
       text,
       anchor: info.anchor ? { ...info.anchor } : null,
+      ...(info.historySource ? { historySource: { ...info.historySource } } : {}),
       x: info.x,
       y: info.y,
     };
@@ -46,7 +47,9 @@ function registerSelectionTranslationMenu(plugin, { Menu, document: doc, t }) {
     const domInfo = plugin._readDomSelectionInfo(doc.defaultView?.getSelection(), root);
     const anchor = (domInfo?.text === text ? domInfo.anchor : null) ||
       plugin._editorSelectionAnchor(editor) || plugin._lastPointerAnchor(root);
-    const selection = snapshot({ text, anchor });
+    const historySource = plugin.captureMarkdownHistorySource?.(info?.file, editor, text) ||
+      (domInfo?.text === text ? domInfo.historySource : null);
+    const selection = snapshot({ text, anchor, historySource });
     plugin.cancelAutoTranslate();
     addTranslationItem(menu, selection);
   }));

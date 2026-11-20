@@ -6,6 +6,7 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ### Added
 
+- Added a sidebar settings shortcut and a source jump in translation history. PDF entries reopen the saved selection or fall back to the page; Markdown entries scroll to the recorded or uniquely matched text when possible.
 - Added editable sidebar source text, manual submit and retranslation without changing the selection popup flow.
 - Added compact up/down navigation for the five most recent prior popup results, with history labels, one-click return and a command to reopen history after dismissal. Reuses existing translation history without new requests or settings.
 - LLM, Azure/Bing and CNKI credentials keep the plaintext default and can opt in to Obsidian Keychain Secure mode individually. DeepL remains Keychain-only.

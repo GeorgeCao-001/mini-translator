@@ -65,7 +65,9 @@ While a selection translation is pending, double-click outside the popup or pres
 
 Under **Mini Translator settings → Selection popup**, the compact **Font size (px)** row contains source and translation numeric inputs with up/down steppers, plus **Resize text** (off by default). Dragging the bottom-right corner with this option enabled scales body text based on both window dimensions; header buttons stay unchanged. **Remember the last popup size** also remembers the text scale. These settings do not change sidebar text or full-PDF output.
 
-**Type or edit in the sidebar:** paste your own source text, then select **Translate** (or Ctrl/⌘+Enter). **Edit source** opens the text of the current result for another translation. Drafts are not sent while typing.
+**Type or edit in the sidebar:** paste your own source text, then select **Translate** or press Enter. Use Shift+Enter to start a new paragraph that is also kept in the translation. **Edit source** opens the text of the current result for another translation. Drafts are not sent while typing.
+
+Use the sidebar gear to open Mini Translator settings. In a history item's **Source details**, **Go to source** opens the recorded PDF selection or page, or returns to the matching Markdown text when available.
 
 **Popup history:** use the title-bar ↑ / ↓ buttons to browse up to five earlier completed translations. The header marks history items, and the return button restores your current translation. If you closed the popup, run **Open recent popup history** from the command palette (or assign a hotkey).
 

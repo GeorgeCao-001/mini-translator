@@ -15,8 +15,13 @@ class Element {
     this.value = "";
     this.dataset = {};
     this.style = { setProperty(name, value) { this[name] = value; } };
-    this.classList = { contains: () => false, add() {}, remove() {} };
+    this.classList = {
+      contains: token => this.className.split(/\s+/).includes(token),
+      add: token => { if (!this.classList.contains(token)) this.addClass(token); },
+      remove: token => { this.className = this.className.split(/\s+/).filter(c => c && c !== token).join(" "); },
+    };
   }
+  get childNodes() { return this.children; }
   empty() { this.children = []; this.text = ""; }
   replaceChildren(...children) { this.empty(); children.forEach((child) => this.appendChild(child)); }
   appendChild(child) {
@@ -111,7 +116,7 @@ const notices = [];
 const obsidian = {
   Plugin: class {}, ItemView: class {}, MarkdownView: class {},
   Modal, PluginSettingTab, Setting, DropdownComponent, SecretComponent,
-  setIcon() {},
+  setIcon(el, icon) { el.icon = icon; },
   Notice: class { constructor(message) { notices.push(message); } },
   requestUrl: async (request) => {
     assert.match(request.url, /^https:\/\/example\.invalid\/v1\/models$/);
@@ -131,7 +136,7 @@ const sandbox = {
     if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
     if (name === "./src/selection-menu.js") return require(path.join(__dirname, "..", "src", "selection-menu.js"));
     if (name === "./src/popup-font.js") return require(path.join(__dirname, "..", "src", "popup-font.js"));
-    if (["./src/popup-lock.js", "./src/popup-history.js", "./src/sidebar-source-editor.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
+    if (["./src/popup-lock.js", "./src/popup-history.js", "./src/sidebar-source-editor.js", "./src/sidebar-navigation.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
     throw new Error("Unexpected dependency in offline UI test: " + name);
   },
   document: { body: new Element(), createElement: (tag) => new Element(tag) },
@@ -545,62 +550,246 @@ async function test(name, callback) {
     assert.equal(view.dictDropdown.buttonEl.parentNode.parentNode, header);
     assert.equal(header.children.filter((child) => child.className.includes("mini-panel-source-control")).length, 3);
     assert.equal(view.modelRow.style.display, "");
-    assert.equal(view.copyBtn.parentNode, header, "Existing copy action must remain available");
     panelPlugin.settings.primarySource = "有道";
     view.updateModelRow();
     assert.equal(view.modelRow.style.display, "none");
     view.onClose();
     sandbox.__ui.setSettings(null);
   });
+  await test("sidebar gear links to plugin settings and Source details contains a safe PDF jump", async () => {
+    const panelPlugin = pluginFixture();
+    const calls = [];
+    const pdf = { path: "Papers/Read me.pdf", name: "Read me.pdf", extension: "pdf" };
+    panelPlugin.manifest = { id: "mini-translator" };
+    panelPlugin.settings.history = [
+      { ts: 1, via: "mock", file: pdf.name, page: 4, locator: { path: pdf.path, page: 4 }, pairs: [{ en: "Text", zh: "文本" }] },
+      { ts: 2, via: "mock", file: "", page: null, pairs: [{ en: "Draft", zh: "草稿" }] },
+    ];
+    const view = new sandbox.__ui.MiniTranslatorView({}, panelPlugin);
+    view.contentEl = new Element();
+    view.app = {
+      setting: { open: () => calls.push("settings"), openTabById: id => calls.push(id) },
+      workspace: { openLinkText: async path => calls.push(path) },
+      vault: { getFileByPath: path => path === pdf.path ? pdf : null },
+    };
+    sandbox.__ui.setSettings(panelPlugin.settings);
+    try {
+      await view.onOpen();
+      const gear = nodes(view.languageRow).find(el => el.className.includes("mini-sidebar-settings-btn"));
+      assert.equal(gear.tagName, "button");
+      gear.click();
+      assert.deepEqual(calls, ["settings", "mini-translator"]);
+      view.toggleHistory();
+      const [item, draftItem] = view.histListEl.children;
+      const details = nodes(item).find(el => el.className === "mini-hist-detail");
+      const info = item.children[0].children[1];
+      const click = { stopPropagation() { this.stopped = true; } };
+      assert.equal(details.style.display, "none");
+      info.onclick(click);
+      assert.equal(details.style.display, "");
+      await button(details, "定位原文").onclick(click);
+      assert.equal(click.stopped, true);
+      assert.equal(view.lastResult, "", "Navigation must not load the history translation");
+      assert.deepEqual(calls, ["settings", "mini-translator", pdf.path + "#page=4"]);
+      assert.equal(nodes(draftItem).some(el => el.className === "mini-hist-locate"), false);
+    } finally {
+      view.onClose();
+      sandbox.__ui.setSettings(null);
+    }
+  });
+  await test("history keeps identical translations from different locations separate", async () => {
+    const instance = new sandbox.module.exports();
+    let writes = 0;
+    Object.assign(instance, {
+      settings: { history: [] },
+      refreshPopupHistoryControls() {},
+      saveData: async () => { writes++; },
+    });
+    const first = { path: "Papers/First.pdf", page: 6 };
+    const second = { path: "Other/First.pdf", page: 6 };
+    const pairs = [{ en: "Same text", zh: "同一句" }];
+    await instance.pushHistory(pairs, "mock", "First.pdf", 6, first);
+    await instance.pushHistory(pairs, "mock", "First.pdf", 6, first);
+    await instance.pushHistory(pairs, "mock", "First.pdf", 6, second);
+    assert.equal(writes, 2);
+    assert.deepEqual(Array.from(instance.settings.history, h => h.locator.path), [second.path, first.path]);
+  });
   await test("sidebar sends manually edited text only on submit and keeps the selection result editable", async () => {
     const panelPlugin = pluginFixture();
-    const history = [], calls = [];
+    const history = [], calls = [], clipboard = [];
     const draft = "First paragraph.\n\nSecond paragraph.";
     panelPlugin.pushHistory = (...args) => history.push(args);
     const view = new sandbox.__ui.MiniTranslatorView({}, panelPlugin);
     view.contentEl = new Element();
     view.app = {};
     sandbox.__ui.setSettings(panelPlugin.settings);
+    sandbox.navigator = { clipboard: { writeText: async value => clipboard.push(value) } };
     sandbox.translateForTest = (...args) => {
       calls.push(args);
-      return { text: "新译文", via: panelPlugin.settings.primarySource, detectedLanguage: "en" };
+      const marker = args[0].match(/__MTBR\d+_\d+__/)?.[0] || "";
+      return { text: "新译文 " + marker + " 第二行", via: panelPlugin.settings.primarySource, detectedLanguage: "en" };
     };
     const restore = vm.runInContext("(() => { const original = translateSentence; translateSentence = (...args) => translateForTest(...args); return () => { translateSentence = original; }; })()", sandbox);
     try {
       await view.onOpen();
       const input = nodes(view.contentEl).find(n => n.tagName === "textarea");
       const submit = button(view.contentEl, "翻译");
-      const edit = button(view.contentEl, "编辑原文");
+      const edit = nodes(view.contentEl).find(el => el.className.split(" ").includes("mini-sidebar-source-edit"));
+      assert.equal(edit.tagName, "button");
+      assert.equal(edit.icon, "pencil");
+      assert.equal(edit.text, "");
+      assert.equal(edit.title, "编辑原文");
+      assert.equal(edit["aria-label"], "编辑原文");
+      const copy = nodes(view.contentEl).find(el => el.className.split(" ").includes("mini-sidebar-source-copy"));
+      assert.equal(copy.icon, "copy");
+      assert.equal(copy.title, "复制译文");
+      assert.equal(copy["aria-label"], "复制译文");
+      assert.equal(copy.text, "");
+      assert.deepEqual(edit.parentNode.children, [edit, copy], "Keep both icons side by side");
+      assert.equal(edit.parentNode.hidden, true);
+      assert.equal(input.rows, 2);
+      await copy.click();
+      assert.equal(clipboard.length, 0);
       assert.equal(submit.disabled, true);
       await submit.click();
       assert.equal(calls.length, 0);
       view.show([{ en: "PDF selection", zh: "划词结果" }], "");
       assert.equal(view.flowEl.hidden, false);
       assert.equal(view.lastResult, "划词结果");
+      const original = view.flowEl.children[0];
+      const translation = view.flowEl.children[1];
+      const toolbar = edit.parentNode.parentNode;
+      assert.equal(edit.parentNode.hidden, false);
       edit.click();
       assert.equal(input.value, "PDF selection");
+      assert.equal(view.flowEl.hidden, false);
+      assert.equal(input.parentNode.parentNode, original);
+      assert.equal(original["data-inline-source-editing"], "true");
+      assert.equal(view.flowEl.children[1], translation, "Do not replace the translation DOM");
+      assert.ok(toolbar.contains(submit), "Inline controls must not push the translation down");
+      assert.equal(view.metaEl.hidden, false);
+      assert.equal(edit.parentNode.hidden, false);
       button(view.contentEl, "取消").click();
+      assert.equal(original["data-inline-source-editing"], "false");
+      assert.equal(original.contains(input), false);
+      assert.equal(translation, view.flowEl.children[1]);
       assert.equal(view.lastResult, "划词结果");
       edit.click();
       input.value = draft;
       input.oninput();
+      edit.click();
+      assert.equal(input.value, draft, "Clicking the pencil again must not discard a draft");
+      await copy.click();
+      assert.deepEqual(clipboard, ["划词结果"], "Copy remains available while editing");
       assert.equal(calls.length, 0, "Editing alone must not send a network request");
       assert.equal(view.show([{ en: "Incidental selection", zh: "不替换" }], ""), false);
-      await submit.click();
-      assert.deepEqual(calls, [[draft, panelPlugin.settings.primarySource, "auto", "zh-Hans"]]);
+      const mirror = input.parentNode.children[1];
+      assert.equal(mirror.textContent, draft + "\u200b", "Resize from the latest multiline draft");
+      input.value = "Short";
+      input.oninput();
+      assert.equal(mirror.textContent, "Short\u200b", "Deleting text must shrink the mirror");
+      input.value = draft;
+      input.oninput();
+      const enter = async props => {
+        const event = { key: "Enter", preventDefault() { this.prevented = true; },
+          stopPropagation() { this.stopped = true; }, ...props };
+        await input.onkeydown(event);
+        return Boolean(event.prevented && event.stopped);
+      };
+      input.value = "First paragraph. Second paragraph.";
+      input.selectionStart = "First paragraph.".length;
+      input.selectionEnd = input.selectionStart + 1;
+      input.setRangeText = (text, start, end, where) => {
+        assert.equal(where, "end");
+        input.value = input.value.slice(0, start) + text + input.value.slice(end);
+        input.selectionStart = input.selectionEnd = start + text.length;
+      };
+      assert.equal(await enter({ shiftKey: true }), true, "Shift+Enter inserts a paragraph break");
+      assert.equal(input.value, draft, "Insert two newlines at the caret, replacing selected text");
+      assert.equal(input.selectionStart, draft.indexOf("Second paragraph."));
+      assert.equal(mirror.textContent, draft + "\u200b");
+      assert.equal(await enter({ isComposing: true, shiftKey: true }), false, "IME confirmation must not insert a paragraph");
+      assert.equal(await enter({ isComposing: true }), false, "IME Enter must not submit");
+      assert.equal(await enter({ keyCode: 229 }), false, "IME confirmation must not submit");
+      assert.equal(await enter({ repeat: true }), true);
+      assert.equal(calls.length, 0);
+      assert.equal(await enter(), true);
+      assert.equal(calls.length, 1, "Keep one request when the provider preserves breaks");
+      assert.match(calls[0][0], /^First paragraph\. __MTBR\d+_0__ Second paragraph\.$/);
+      assert.deepEqual(calls[0].slice(1, 4), [panelPlugin.settings.primarySource, "auto", "zh-Hans"]);
+      assert.equal(calls[0][4].keepBreakMarkers, true);
       assert.equal(history.length, 1);
+      assert.equal(history[0][0][0].preserveLineBreaks, true);
       assert.deepEqual(history[0].slice(1), [panelPlugin.settings.primarySource, "", null]);
-      assert.equal(view.lastResult, "新译文");
+      assert.equal(view.lastResult, "新译文\n\n第二行");
+      const paragraphs = index => {
+        const result = view.flowEl.children[index];
+        assert.ok(result.className.includes("mini-text-multipara"));
+        assert.ok(result.children.every(node => node.className === "mini-text-paragraph"));
+        return result.children.map(node => node.text);
+      };
+      assert.deepEqual(paragraphs(0), ["First paragraph.", "Second paragraph."]);
+      assert.deepEqual(paragraphs(1), ["新译文", "第二行"]);
+      view.show(history[0][0], "from history");
+      assert.deepEqual(paragraphs(1), ["新译文", "第二行"]);
+      view.show([{ en: "First\nLine", zh: "同段\n下一行", preserveLineBreaks: true }], "single newline");
+      assert.equal(view.flowEl.children[1].text, "同段\n下一行", "A pasted single newline remains within the same paragraph");
+      assert.equal(view.flowEl.children[1].className.includes("mini-text-multipara"), false);
+      view.show(history[0][0], "from history");
       assert.equal(view.flowEl.hidden, false);
-      assert.equal(view.copyBtn.hidden, false);
+      assert.equal(copy.parentNode.hidden, false);
+      await copy.click();
+      assert.deepEqual(clipboard, ["划词结果", "新译文\n\n第二行"], "Copy the translation with its line breaks");
+      assert.equal(view.flowEl.children[0]["data-inline-source-editing"], "false");
       edit.click();
+      assert.equal(copy.parentNode.hidden, false);
+      assert.equal(view.flowEl.hidden, false);
       assert.equal(input.value, draft);
     } finally {
       view.onClose();
       restore();
       delete sandbox.translateForTest;
+      delete sandbox.navigator;
       sandbox.__ui.setSettings(null);
     }
+  });
+  await test("manual line breaks survive missing markers and keep multiline LaTeX intact", async () => {
+    const nav = vm.runInContext("({ reflow: formatTextForLanguage, breaks: SIDEBAR_SOURCE.translateWithLineBreaks, math: MATH_RE })", sandbox);
+    const calls = [];
+    const formula = "$$\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}$$";
+    const draft = "\nAlpha\nBeta " + formula + "\n";
+    const result = await nav.breaks(draft, {
+      mathPattern: nav.math,
+      translate: async (value, packed) => {
+        calls.push([value, packed]);
+        if (packed) return { text: "合成一段", via: "mock" };
+        if (value === "Alpha") return { text: "第一行", via: "mock", detectedLanguage: "en" };
+        assert.equal(value, "Beta " + formula);
+        return { text: "第二行 " + formula, via: "mock", detectedLanguage: "en" };
+      },
+      format: value => nav.reflow(value, "zh-Hans"),
+    });
+    assert.equal(calls.length, 3);
+    assert.match(calls[0][0], /__MTBR\d+_0__/);
+    assert.ok(calls[0][0].includes(formula));
+    assert.equal(result.text, "\n第一行\n第二行 " + formula + "\n");
+    assert.equal(result.via, "mock");
+    assert.equal(result.detectedLanguage, "en");
+    assert.equal(nav.reflow("PDF\nhard-wrap", "en"), "PDF hard-wrap", "Keep ordinary PDF reflow");
+    const one = await nav.breaks("First\nNext", {
+      mathPattern: nav.math,
+      translate: async value => ({ text: value.replace("First", "第一行").replace("Next", "下一行"), via: "mock" }),
+      format: value => nav.reflow(value, "zh-Hans"),
+    });
+    assert.equal(one.text, "第一行\n下一行");
+    let sent = 0;
+    await nav.breaks("Canceled\nDraft", {
+      mathPattern: nav.math,
+      translate: async () => { sent++; return { text: "missing", via: "mock" }; },
+      format: text => text,
+      stillCurrent: () => false,
+    });
+    assert.equal(sent, 1, "Do not start per-line fallback requests for a stale draft");
   });
   await test("sidebar retains drafts after errors and discards stale or closed requests", async () => {
     const panelPlugin = pluginFixture();
@@ -642,7 +831,7 @@ async function test(name, callback) {
     }
   });
   await test("selecting text inside the sidebar editor does not start automatic translation", () => {
-    sandbox.document.activeElement = { closest: selector => selector === ".mini-sidebar-source-editor" ? {} : null };
+    sandbox.document.activeElement = { closest: selector => selector.includes(".mini-sidebar-source-form") ? {} : null };
     const previous = sandbox.window.getSelection;
     sandbox.window.getSelection = () => { throw new Error("The sidebar draft must not reach selection translation"); };
     try {

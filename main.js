@@ -81,6 +81,7 @@ const POPUP_LOCK = BUNDLED_RUNTIME?.popupLock || require("./src/popup-lock.js");
 const { createPopupLockControl, resetPopupContent } = POPUP_LOCK;
 const POPUP_HISTORY = BUNDLED_RUNTIME?.popupHistory || require("./src/popup-history.js");
 const SIDEBAR_SOURCE = BUNDLED_RUNTIME?.sidebarSource || require("./src/sidebar-source-editor.js");
+const SIDEBAR_NAV = BUNDLED_RUNTIME?.sidebarNavigation || require("./src/sidebar-navigation.js");
 
 const TYPOGRAPHY = BUNDLED_RUNTIME?.typography || require("./src/typography.js");
 const TYPOGRAPHY_UI = BUNDLED_RUNTIME?.typographyUi || require("./src/typography-settings.js");
@@ -1828,6 +1829,7 @@ function baseReflowZh(s) {
 // 目标语言排版：中日文与东南亚文字不凭空插入词间空格；有显式词间空格的语言
 // 用一个空格合并 PDF 硬换行。词典条目保留逐行结构，不做段落合并。
 function formatTextForLanguage(s, language = "zh-Hans", options = {}) {
+  if (options.preserveLineBreaks) return String(s ?? "");
   if (options.dictionary) return typofixZh(s);
   const resolved = resolvedLayoutLanguage(language, s);
   const script = languageInfo(resolved).script;
@@ -1882,14 +1884,17 @@ function renderTranslationText(container, text, dictionary = false) {
 function renderPairsTo(el, pairs) {
   el.empty();
   el.addClass("mini-flow");
+  let firstSource = null;
   for (const p of pairs) {
     const sourceLanguage = p.sourceLanguage || "auto";
     const targetLanguage = p.targetLanguage || "zh-Hans";
-    const sourceText = formatTextForLanguage(p.en, sourceLanguage);
+    const preserveLineBreaks = p.preserveLineBreaks === true;
+    const sourceText = formatTextForLanguage(p.en, sourceLanguage, { preserveLineBreaks });
     const targetText = formatTextForLanguage(p.zh, targetLanguage, {
-      dictionary: !!p.dict,
+      dictionary: !!p.dict, preserveLineBreaks,
     });
     const sourceEl = el.createDiv({ cls: "mini-en-line mini-source-line" });
+    firstSource ||= sourceEl;
     applyLanguageAttrs(sourceEl, p.detectedLanguage || sourceLanguage, sourceText);
     renderTranslationText(sourceEl, sourceText);
     const targetEl = el.createDiv({
@@ -1900,6 +1905,7 @@ function renderPairsTo(el, pairs) {
     applyLanguageAttrs(targetEl, targetLanguage, targetText);
     renderTranslationText(targetEl, targetText, !!p.dict);
   }
+  return firstSource;
 }
 
 // ---------- 单词：百度 sug（免 Key，释义简） ----------
@@ -4747,7 +4753,8 @@ async function translateSentence(
   text,
   primary,
   from = "auto",
-  to = "zh-Hans"
+  to = "zh-Hans",
+  { keepBreakMarkers = false } = {}
 ) {
   from = safeLanguageCode(from, true);
   to = safeLanguageCode(to);
@@ -4765,7 +4772,9 @@ async function translateSentence(
     const translated = await llmRequest(
       safeText,
       prof,
-      buildTranslatePrompt(from, to),
+      buildTranslatePrompt(from, to) + (keepBreakMarkers
+        ? "\n换行标记 __MTBR数字_数字__ 是原文的分隔符。只翻译标记之间的内容；每个标记必须原样保留一次，顺序和位置不变。"
+        : ""),
       from,
       to
     );
@@ -4877,6 +4886,18 @@ class MiniTranslatorView extends ItemView {
         this.plugin.refreshPanel();
         this.refreshLanguageNotice();
       });
+    const settingsLabel = t("panel.open_settings");
+    const settingsBtn = this.languageRow.createEl("button", {
+      cls: "mini-sidebar-settings-btn clickable-icon",
+      attr: { type: "button", title: settingsLabel, "aria-label": settingsLabel },
+    });
+    setIcon(settingsBtn, "settings");
+    settingsBtn.onclick = () => {
+      try {
+        if (SIDEBAR_NAV.openPluginSettings(this.app, this.plugin.manifest?.id)) return;
+      } catch (_) {}
+      new Notice(t("panel.settings_unavailable"));
+    };
     this.languageNoticeEl = this.contentEl.createDiv({
       cls: "mini-language-notice",
     });
@@ -4902,16 +4923,6 @@ class MiniTranslatorView extends ItemView {
         await this.plugin.saveData(this.plugin.settings);
       }
     });
-    this.copyBtn = header.createEl("button", {
-      text: t("panel.copy_translation"),
-      cls: "mini-copy-btn",
-    });
-    this.copyBtn.onclick = async () => {
-      if (!this.lastResult) return;
-      await navigator.clipboard.writeText(this.lastResult);
-      new Notice(t("common.copied"), 1500);
-    };
-
     // 全文翻译不再只藏在命令面板；入口收进一条轻量工具条，避免大按钮打断面板主内容。
     this.panelActions = this.contentEl.createDiv({ cls: "mini-panel-actions" });
     const fullTranslateLabel = this.panelActions.createDiv({
@@ -4942,17 +4953,20 @@ class MiniTranslatorView extends ItemView {
     TYPOGRAPHY.applyTypography(this.flowEl, this.plugin.settings, "sidebar");
     this.metaEl = this.contentEl.createDiv({ cls: "mini-meta" });
     this.sidebarSourceEditor = SIDEBAR_SOURCE.createSidebarSourceEditor(sourceArea, {
-      t,
-      translate: text => this.translateSidebarText(text),
+      t, setIcon,
+      translate: (text, stillCurrent) => this.translateSidebarText(text, stillCurrent),
+      copyResult: async () => {
+        if (!this.lastResult) return;
+        await navigator.clipboard.writeText(this.lastResult);
+        new Notice(t("common.copied"), 1500);
+      },
       showResult: ({ pairs, via }) => {
         this.show(pairs, providerName(via), true);
         void this.plugin.pushHistory(pairs, via, "", null);
       },
       onModeChange: (editing, hasResult) => {
-        const showResult = !editing && hasResult;
-        this.flowEl.hidden = !showResult;
-        this.metaEl.hidden = !showResult;
-        this.copyBtn.hidden = !showResult;
+        this.flowEl.hidden = !hasResult;
+        this.metaEl.hidden = !hasResult;
       },
     });
 
@@ -4992,22 +5006,30 @@ class MiniTranslatorView extends ItemView {
     // 订阅中枢：设置页/管理弹窗改了任何源、模型或选中状态，这里立即实时重建
     this.unsubSources = onSourcesSync(() => this.syncSource());
   }
-  async translateSidebarText(text) {
+  async translateSidebarText(text, stillCurrent) {
     const { sourceLanguage, targetLanguage, primarySource } = this.plugin.settings;
     const from = safeLanguageCode(sourceLanguage, true);
     const to = safeLanguageCode(targetLanguage);
-    const result = await translateSentence(text, primarySource, from, to);
+    const preserveLineBreaks = /[\r\n]/.test(text);
+    const result = await SIDEBAR_SOURCE.translateWithLineBreaks(text, {
+      mathPattern: MATH_RE, stillCurrent,
+      translate: (value, keepBreakMarkers) => keepBreakMarkers
+        ? translateSentence(value, primarySource, from, to, { keepBreakMarkers })
+        : translateSentence(value, primarySource, from, to),
+      format: value => formatTextForLanguage(value, to),
+    });
     return { via: result.via, pairs: [{
-      en: text, zh: formatTextForLanguage(result.text, to),
+      en: text, zh: result.text,
       sourceLanguage: from, targetLanguage: to, detectedLanguage: result.detectedLanguage,
+      ...(preserveLineBreaks ? { preserveLineBreaks } : {}),
     }] };
   }
 
   show(pairs, meta, manual = false) {
     // Never replace an in-progress manual draft with an incidental popup result.
     if (!manual && this.sidebarSourceEditor && !this.sidebarSourceEditor.canAcceptExternal()) return false;
-    renderPairsTo(this.flowEl, pairs);
-    this.sidebarSourceEditor?.accept(pairs);
+    const firstSource = renderPairsTo(this.flowEl, pairs);
+    this.sidebarSourceEditor?.accept(pairs, firstSource);
     TYPOGRAPHY.applyTypography(this.flowEl, this.plugin.settings, "sidebar");
     const from = pairs[0]?.sourceLanguage || this.plugin.settings.sourceLanguage;
     const to = pairs[0]?.targetLanguage || this.plugin.settings.targetLanguage;
@@ -5022,6 +5044,7 @@ class MiniTranslatorView extends ItemView {
       .map((p) =>
         formatTextForLanguage(p.zh, p.targetLanguage || to, {
           dictionary: !!p.dict,
+          preserveLineBreaks: p.preserveLineBreaks === true,
         })
       )
       .join("\n\n");
@@ -5126,10 +5149,30 @@ class MiniTranslatorView extends ItemView {
       const lines = [
         t("panel.time", { time: new Date(h.ts).toLocaleString(locale) }),
       ];
-      if (h.file) lines.push(t("panel.file", { file: h.file }));
+      const sourceFile = h.locator?.path || h.file;
+      if (sourceFile) lines.push(t("panel.file", { file: sourceFile }));
       if (h.page) lines.push(t("panel.page", { page: h.page }));
-      if (!h.file && !h.page) lines.push(t("panel.no_source_record"));
-      detail.setText(lines.join("\n"));
+      if (!sourceFile && !h.page) lines.push(t("panel.no_source_record"));
+      detail.createDiv({ cls: "mini-hist-detail-text", text: lines.join("\n") });
+      if (sourceFile) {
+        const locate = detail.createEl("button", {
+          cls: "mini-hist-locate",
+          attr: { type: "button" },
+          text: t("panel.locate_source"),
+        });
+        locate.onclick = async (ev) => {
+          ev.stopPropagation();
+          locate.disabled = true;
+          try {
+            const status = await SIDEBAR_NAV.openHistorySource(this.app, h);
+            if (status !== "located") new Notice(t("panel.locate_" + status));
+          } catch (_) {
+            new Notice(t("panel.locate_failed"));
+          } finally {
+            locate.disabled = false;
+          }
+        };
+      }
       info.onclick = (ev) => {
         ev.stopPropagation();
         detail.style.display =
@@ -6057,7 +6100,7 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   onSelectionChanged() {
-    if (document.activeElement?.closest?.(".mini-sidebar-source-editor")) return;
+    if (document.activeElement?.closest?.(".mini-sidebar-source-editor, .mini-sidebar-source-form")) return;
     const sel = window.getSelection();
     const t = ((sel && sel.toString()) || "").trim();
     if (!this.settings.autoTranslate) return;
@@ -6073,7 +6116,7 @@ module.exports = class MiniTranslator extends Plugin {
     const delay = (this.settings.autoTranslateDelay ?? 2) * 1000;
     // 用对象 token 防止一个已经排队但未被及时清理的旧回调误触发。
     const selectionInfo = this._readDomSelectionInfo(sel);
-    const pendingToken = { text: t, anchor: selectionInfo?.anchor || null };
+    const pendingToken = { text: t, anchor: selectionInfo?.anchor || null, historySource: selectionInfo?.historySource };
     this._autoTranslatePending = pendingToken;
     this.dwellTimer = setTimeout(() => {
       if (this._autoTranslatePending !== pendingToken) return;
@@ -6087,6 +6130,7 @@ module.exports = class MiniTranslator extends Plugin {
       this.translateSelection("paragraph", {
         text: curText,
         anchor: currentInfo?.anchor || pendingToken.anchor,
+        historySource: currentInfo?.historySource || pendingToken.historySource,
       });
     }, delay);
   }
@@ -6154,6 +6198,10 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   // ---------- 选区旁弹窗 ----------
+  captureMarkdownHistorySource(file, editor, text) {
+    return SIDEBAR_NAV.captureMarkdownSource(file, editor, text);
+  }
+
   _readDomSelectionInfo(selection = window.getSelection(), root = null) {
     try {
       const text = String(selection?.toString?.() || "").trim();
@@ -6186,7 +6234,10 @@ module.exports = class MiniTranslator extends Plugin {
         const bounding = range.getBoundingClientRect?.();
         if (visibleRect(bounding)) rects = [bounding];
       }
-      if (!rects.length) return { text, anchor: null };
+      const historySource = SIDEBAR_NAV.captureDomSource(
+        this.app?.workspace, range.startContainer || selection.anchorNode, text, undefined, range.endContainer
+      );
+      if (!rects.length) return { text, anchor: null, ...(historySource ? { historySource } : {}) };
 
       const anchor = {
         left: Math.min(...rects.map((r) => Number(r.left))),
@@ -6196,7 +6247,7 @@ module.exports = class MiniTranslator extends Plugin {
       };
       // Keep popup positioning in viewport coordinates. _normalizePopupAnchor
       // clips partially visible selections and guards against pathological values.
-      return { text, anchor, x: anchor.left, y: anchor.bottom + 6 };
+      return { text, anchor, x: anchor.left, y: anchor.bottom + 6, ...(historySource ? { historySource } : {}) };
     } catch (e) {
       return null;
     }
@@ -7255,8 +7306,9 @@ module.exports = class MiniTranslator extends Plugin {
       let x = null;
       let y = null;
       let anchor = null;
-      if (sel.rangeCount > 0) {
-        const r = sel.getRangeAt(0).getBoundingClientRect();
+      const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      if (range) {
+        const r = range.getBoundingClientRect();
         const b = iframe.getBoundingClientRect();
         anchor = {
           left: b.left + r.left,
@@ -7267,7 +7319,10 @@ module.exports = class MiniTranslator extends Plugin {
         x = anchor.left;
         y = anchor.bottom + 6;
       }
-      return { text, x, y, anchor };
+      const historySource = SIDEBAR_NAV.captureDomSource(
+        this.app?.workspace, range?.startContainer || sel.anchorNode, text, iframe, range?.endContainer
+      );
+      return { text, x, y, anchor, historySource };
     } catch (e) {
       console.log("[mini-translator] iframe 读取失败:", e);
       return null;
@@ -7282,11 +7337,15 @@ module.exports = class MiniTranslator extends Plugin {
     if (mainSel && mainSel.rangeCount > 0) {
       const t = mainSel.toString().trim();
       if (t) {
-        const r = mainSel.getRangeAt(0).getBoundingClientRect();
+        const range = mainSel.getRangeAt(0);
+        const r = range.getBoundingClientRect();
         tried.push([
           "主窗口选区",
           {
             text: t,
+            historySource: SIDEBAR_NAV.captureDomSource(
+              this.app?.workspace, range.startContainer || mainSel.anchorNode, t, undefined, range.endContainer
+            ),
             x: r.left,
             y: r.bottom + 6,
             anchor: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
@@ -7333,10 +7392,12 @@ module.exports = class MiniTranslator extends Plugin {
     let x = null;
     let y = null;
     let anchor = null;
+    let historySource = null;
     const takeSelectionInfo = (info) => {
       if (!info?.text) return false;
       text = String(info.text).trim();
       anchor = info.anchor || null;
+      historySource = info.historySource || null;
       const hasFiniteCoord = (value) =>
         value != null && Number.isFinite(Number(value));
       x = hasFiniteCoord(info.x) ? Number(info.x) : anchor?.left ?? null;
@@ -7364,6 +7425,7 @@ module.exports = class MiniTranslator extends Plugin {
 
     if (!text && mdView?.editor) {
       text = (mdView.editor.getSelection() || "").trim();
+      if (text) historySource = SIDEBAR_NAV.captureMarkdownSource(mdView.file, mdView.editor, text);
       anchor = this._editorSelectionAnchor(mdView.editor);
       if (anchor) {
         x = anchor.left;
@@ -7609,21 +7671,9 @@ module.exports = class MiniTranslator extends Plugin {
         this._popupCurrentPairs = pairs;
         this.refreshPopupHistoryControls();
       }
-      // 历史记录：附上来源（哪个文件、PDF 第几页 / 笔记名）
-      let hFile = "";
-      let hPage = null;
-      if (mdView && mdView.file) {
-        hFile = mdView.file.basename;
-      } else {
-        try {
-          const loc = await this.locatePdfDoc();
-          if (loc) {
-            hFile = loc.leaf.view.file ? loc.leaf.view.file.name : "";
-            hPage = loc.page || null;
-          }
-        } catch (e) {}
-      }
-      this.pushHistory(pairs, via, hFile, hPage);
+      // Use the source captured before provider requests or popup focus changes.
+      const hFile = (historySource?.path?.split("/").pop() || "").replace(/\.md$/i, "");
+      this.pushHistory(pairs, via, hFile, historySource?.page || null, historySource);
       console.log("[mini-translator] 耗时", Date.now() - t0, "ms | 源:", via);
     } catch (e) {
       if (this._popupRunId === popupRunId) {
@@ -7691,12 +7741,13 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   // ---------- 翻译历史：带来源（源名 + 文件 + 页码），持久化到 data.json，上限 50 条 ----------
-  async pushHistory(pairs, via, file, page) {
+  async pushHistory(pairs, via, file, page, locator = null) {
     try {
       if (!Array.isArray(this.settings.history)) this.settings.history = [];
       const h = this.settings.history;
       const sig = pairs.map((p) => p.en + "|" + p.zh).join("|");
-      if (h.length && h[0].sig === sig) return; // 连续重复不记
+      if (h[0]?.sig === sig && h[0].file === (file || "") && h[0].page === (page || null) &&
+          JSON.stringify(h[0].locator || null) === JSON.stringify(locator)) return;
       h.unshift({
         ts: Date.now(),
         via,
@@ -7704,6 +7755,7 @@ module.exports = class MiniTranslator extends Plugin {
         sig,
         file: file || "",
         page: page || null,
+        ...(locator ? { locator } : {}),
       });
       if (h.length > 50) h.length = 50;
       this.refreshPopupHistoryControls();
