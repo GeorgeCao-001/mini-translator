@@ -6,6 +6,7 @@ All public changes to Mini Translator are recorded here. Versions follow [Semant
 
 ### Added
 
+- Added editable sidebar source text, manual submit and retranslation without changing the selection popup flow.
 - Added compact up/down navigation for the five most recent prior popup results, with history labels, one-click return and a command to reopen history after dismissal. Reuses existing translation history without new requests or settings.
 - LLM, Azure/Bing and CNKI credentials keep the plaintext default and can opt in to Obsidian Keychain Secure mode individually. DeepL remains Keychain-only.
 - Added DeepL official text translation through the existing provider/configuration UI, using user-owned Obsidian Keychain secrets instead of plaintext API keys. Free/Pro routing, language mapping, formula protection and localized API errors are included; fallback billing is opt-in and directly selected DeepL never silently switches services. PDF full translation remains LLM-only. No new dependencies.

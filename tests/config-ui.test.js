@@ -35,6 +35,7 @@ class Element {
   hide() { this.style.display = "none"; }
   show() { this.style.display = ""; }
   setText(text) { this.text = text; }
+  appendText(text) { this.text += text; }
   addEventListener(name, handler) { this["on" + name] = handler; }
   focus() {}
   click() { if (this.disabled) return; return this.onclick?.(); }
@@ -130,16 +131,17 @@ const sandbox = {
     if (name === "./src/source-picker.js") return require(path.join(__dirname, "..", "src", "source-picker.js"));
     if (name === "./src/selection-menu.js") return require(path.join(__dirname, "..", "src", "selection-menu.js"));
     if (name === "./src/popup-font.js") return require(path.join(__dirname, "..", "src", "popup-font.js"));
-    if (["./src/popup-lock.js", "./src/popup-history.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
+    if (["./src/popup-lock.js", "./src/popup-history.js", "./src/sidebar-source-editor.js", "./src/page-ranges.js", "./src/pdf-file-picker.js", "./src/pdf-translation-ui.js"].includes(name)) return require(path.join(__dirname, "..", name));
     throw new Error("Unexpected dependency in offline UI test: " + name);
   },
   document: { body: new Element(), createElement: (tag) => new Element(tag) },
-  window: {}, console,
+  window: {}, console, URL, URLSearchParams,
 };
 vm.createContext(sandbox);
-const source = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+const file = path.resolve(__dirname, "..", process.argv[2] || "main.js");
+const source = fs.readFileSync(file, "utf8");
 vm.runInContext(source + `
-;__ui = { LLMConfigModal, MiniTranslatorSettingTab, MiniTranslatorView, LLM_PRESETS,
+;__ui = { LLMConfigModal, MiniTranslatorSettingTab, MiniTranslatorView, LLM_PRESETS, I18N,
   setSettings: (settings) => { PLUGIN_SETTINGS = settings; } };
 // Settings previews are unrelated to this test; do not load the orb renderer.
 loadOrbModule = () => ({
@@ -283,7 +285,7 @@ async function test(name, callback) {
   });
   await test("DeepL uses the existing manager with a secret reference in both UI languages", async () => {
     const isolated = pluginFixture(), initial = JSON.stringify(isolated.settings);
-    const I = require("../src/i18n.js");
+    const I = sandbox.__ui.I18N;
     try {
       for (const language of ["zh-CN", "en"]) {
         I.setUiLanguage(language);
@@ -550,6 +552,106 @@ async function test(name, callback) {
     view.onClose();
     sandbox.__ui.setSettings(null);
   });
+  await test("sidebar sends manually edited text only on submit and keeps the selection result editable", async () => {
+    const panelPlugin = pluginFixture();
+    const history = [], calls = [];
+    const draft = "First paragraph.\n\nSecond paragraph.";
+    panelPlugin.pushHistory = (...args) => history.push(args);
+    const view = new sandbox.__ui.MiniTranslatorView({}, panelPlugin);
+    view.contentEl = new Element();
+    view.app = {};
+    sandbox.__ui.setSettings(panelPlugin.settings);
+    sandbox.translateForTest = (...args) => {
+      calls.push(args);
+      return { text: "新译文", via: panelPlugin.settings.primarySource, detectedLanguage: "en" };
+    };
+    const restore = vm.runInContext("(() => { const original = translateSentence; translateSentence = (...args) => translateForTest(...args); return () => { translateSentence = original; }; })()", sandbox);
+    try {
+      await view.onOpen();
+      const input = nodes(view.contentEl).find(n => n.tagName === "textarea");
+      const submit = button(view.contentEl, "翻译");
+      const edit = button(view.contentEl, "编辑原文");
+      assert.equal(submit.disabled, true);
+      await submit.click();
+      assert.equal(calls.length, 0);
+      view.show([{ en: "PDF selection", zh: "划词结果" }], "");
+      assert.equal(view.flowEl.hidden, false);
+      assert.equal(view.lastResult, "划词结果");
+      edit.click();
+      assert.equal(input.value, "PDF selection");
+      button(view.contentEl, "取消").click();
+      assert.equal(view.lastResult, "划词结果");
+      edit.click();
+      input.value = draft;
+      input.oninput();
+      assert.equal(calls.length, 0, "Editing alone must not send a network request");
+      assert.equal(view.show([{ en: "Incidental selection", zh: "不替换" }], ""), false);
+      await submit.click();
+      assert.deepEqual(calls, [[draft, panelPlugin.settings.primarySource, "auto", "zh-Hans"]]);
+      assert.equal(history.length, 1);
+      assert.deepEqual(history[0].slice(1), [panelPlugin.settings.primarySource, "", null]);
+      assert.equal(view.lastResult, "新译文");
+      assert.equal(view.flowEl.hidden, false);
+      assert.equal(view.copyBtn.hidden, false);
+      edit.click();
+      assert.equal(input.value, draft);
+    } finally {
+      view.onClose();
+      restore();
+      delete sandbox.translateForTest;
+      sandbox.__ui.setSettings(null);
+    }
+  });
+  await test("sidebar retains drafts after errors and discards stale or closed requests", async () => {
+    const panelPlugin = pluginFixture();
+    const pending = [], history = [];
+    panelPlugin.pushHistory = (...args) => history.push(args);
+    const view = new sandbox.__ui.MiniTranslatorView({}, panelPlugin);
+    view.contentEl = new Element();
+    view.app = {};
+    sandbox.__ui.setSettings(panelPlugin.settings);
+    try {
+      await view.onOpen();
+      view.translateSidebarText = text => new Promise((resolve, reject) => pending.push({ text, resolve, reject }));
+      const input = nodes(view.contentEl).find(n => n.tagName === "textarea");
+      const status = nodes(view.contentEl).find(n => n.role === "status");
+      const submit = button(view.contentEl, "翻译");
+      const enter = text => { input.value = text; input.oninput(); };
+      enter("Failed draft");
+      const failure = submit.click();
+      assert.equal(submit.disabled, true);
+      pending[0].reject(new Error("simulated provider error"));
+      await failure;
+      assert.equal(input.value, "Failed draft");
+      assert.match(status.textContent, /原文已保留/);
+      assert.equal(submit.disabled, false);
+      const stale = submit.click();
+      enter("Replacement draft");
+      const current = submit.click();
+      pending[1].resolve({ pairs: [{ en: pending[1].text, zh: "过期译文" }], via: "mock" });
+      await stale;
+      assert.equal(input.value, "Replacement draft");
+      assert.equal(history.length, 0);
+      view.onClose();
+      pending[2].resolve({ pairs: [{ en: pending[2].text, zh: "已关闭" }], via: "mock" });
+      await current;
+      assert.equal(history.length, 0);
+    } finally {
+      view.onClose();
+      sandbox.__ui.setSettings(null);
+    }
+  });
+  await test("selecting text inside the sidebar editor does not start automatic translation", () => {
+    sandbox.document.activeElement = { closest: selector => selector === ".mini-sidebar-source-editor" ? {} : null };
+    const previous = sandbox.window.getSelection;
+    sandbox.window.getSelection = () => { throw new Error("The sidebar draft must not reach selection translation"); };
+    try {
+      sandbox.module.exports.prototype.onSelectionChanged.call({ settings: { autoTranslate: true } });
+    } finally {
+      delete sandbox.document.activeElement;
+      sandbox.window.getSelection = previous;
+    }
+  });
   await test("choosing either a preset or blank configuration opens an unsaved draft", async () => {
     for (const choosePreset of [true, false]) {
       const draftPlugin = pluginFixture();
@@ -737,7 +839,7 @@ async function test(name, callback) {
     assert.equal(draftModal.draft, null);
   });
   await test("configuration manager renders in English when the UI locale changes", async () => {
-    const i18n = require(path.join(__dirname, "..", "src", "i18n.js"));
+    const i18n = sandbox.__ui.I18N;
     i18n.setUiLanguage("en");
     try {
       const englishModal = new sandbox.__ui.LLMConfigModal({}, pluginFixture());

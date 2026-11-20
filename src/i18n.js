@@ -6,6 +6,12 @@ const UI_LANGUAGE_OPTIONS = Object.freeze(["auto", "zh-CN", "en"]);
 
 const MESSAGES = Object.freeze({
   "zh-CN": Object.freeze({
+    "panel.source_title": "原文",
+    "panel.edit_source": "编辑原文",
+    "panel.source_placeholder": "输入或粘贴要翻译的文本…",
+    "panel.translate_input": "翻译",
+    "panel.input_failed": "翻译失败。原文已保留，请检查翻译源和语言后重试。",
+    "panel.finish_edit": "请先完成或取消原文编辑，再打开历史。",
     "popup_history.label": "悬浮窗历史",
     "popup_history.older": "查看更早一条",
     "popup_history.newer": "查看更新一条",
@@ -527,6 +533,12 @@ const MESSAGES = Object.freeze({
   }),
 
   en: Object.freeze({
+    "panel.source_title": "Source text",
+    "panel.edit_source": "Edit source",
+    "panel.source_placeholder": "Type or paste text to translate…",
+    "panel.translate_input": "Translate",
+    "panel.input_failed": "Translation failed. Your text was kept. Check the provider and languages, then retry.",
+    "panel.finish_edit": "Finish or cancel your draft before opening history.",
     "popup_history.label": "Popup history",
     "popup_history.older": "Show older translation",
     "popup_history.newer": "Show newer translation",

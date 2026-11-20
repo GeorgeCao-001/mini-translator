@@ -76,6 +76,7 @@ function buildRuntime() {
   const popupFont = buildCommonJsModule("src/popup-font.js");
   const popupLock = buildCommonJsModule("src/popup-lock.js");
   const popupHistory = buildCommonJsModule("src/popup-history.js");
+  const sidebarSource = buildCommonJsModule("src/sidebar-source-editor.js");
   const typography = buildCommonJsModule("src/typography.js");
   const typographyUi = buildCommonJsModule("src/typography-settings.js");
   const pageRanges = buildCommonJsModule("src/page-ranges.js");
@@ -128,12 +129,13 @@ ${pdf}
   const popupFont = ${popupFont};
   const popupLock = ${popupLock};
   const popupHistory = ${popupHistory};
+  const sidebarSource = ${sidebarSource};
   const typography = ${typography};
   const typographyUi = ${typographyUi};
   const pageRanges = ${pageRanges};
   const pdfFilePicker = ${pdfFilePicker};
   const pdfTranslationUi = ${pdfTranslationUi};
-  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, deepl, credentials, sourceOrder, sourcePicker, selectionMenu, popupFont, popupLock, popupHistory, typography, typographyUi, pageRanges, pdfFilePicker, pdfTranslationUi });
+  return Object.freeze({ loadPdfJs, getPdfWorkerSource, loadOrbModule, i18n, modelConfig, deepl, credentials, sourceOrder, sourcePicker, selectionMenu, popupFont, popupLock, popupHistory, sidebarSource, typography, typographyUi, pageRanges, pdfFilePicker, pdfTranslationUi });
 })();`;
 }
 

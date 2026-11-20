@@ -1875,6 +1875,25 @@ button.mini-source-picker-trigger:focus-visible {
 }
 .mini-translator-popup button.mini-popup-lock svg { width: 16px; height: 16px; }
 
+/* Manual source editing is scoped to the sidebar, not the selection popup. */
+.mini-translator-panel .mini-sidebar-source-editor { margin-block: 10px; }
+.mini-sidebar-source-heading, .mini-sidebar-source-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mini-sidebar-source-heading { color: var(--text-muted); font-size: var(--font-ui-small); }
+.mini-sidebar-source-form { margin-block-start: 6px; }
+.mini-sidebar-source-form textarea { width: 100%; min-height: 80px; resize: vertical; }
+.mini-sidebar-source-actions { justify-content: flex-end; margin-block-start: 6px; }
+.mini-sidebar-source-status { color: var(--text-error); font-size: var(--font-ui-small); }
+.mini-sidebar-source-status:not(:empty) { margin-block-start: 6px; }
+.mini-translator-panel .mini-sidebar-source-editor [hidden],
+.mini-translator-panel .mini-flow[hidden],
+.mini-translator-panel .mini-meta[hidden],
+.mini-translator-panel .mini-copy-btn[hidden] { display: none; }
+
 /* Recent popup history: compact controls that don't shift the body layout. */
 .mini-translator-popup .mini-popup-history-controls {
   display: inline-grid;

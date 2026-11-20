@@ -80,6 +80,7 @@ const { parsePageRange, formatPageRanges, normalizePageNumbers, validateBlockPag
 const POPUP_LOCK = BUNDLED_RUNTIME?.popupLock || require("./src/popup-lock.js");
 const { createPopupLockControl, resetPopupContent } = POPUP_LOCK;
 const POPUP_HISTORY = BUNDLED_RUNTIME?.popupHistory || require("./src/popup-history.js");
+const SIDEBAR_SOURCE = BUNDLED_RUNTIME?.sidebarSource || require("./src/sidebar-source-editor.js");
 
 const TYPOGRAPHY = BUNDLED_RUNTIME?.typography || require("./src/typography.js");
 const TYPOGRAPHY_UI = BUNDLED_RUNTIME?.typographyUi || require("./src/typography-settings.js");
@@ -4935,9 +4936,25 @@ class MiniTranslatorView extends ItemView {
     this.fullTranslatePickBtn.onclick = () =>
       new FilePickTranslateModal(this.app, this.plugin).open();
 
+    this.lastResult = "";
+    const sourceArea = this.contentEl.createDiv();
     this.flowEl = this.contentEl.createDiv({ cls: "mini-flow" });
     TYPOGRAPHY.applyTypography(this.flowEl, this.plugin.settings, "sidebar");
     this.metaEl = this.contentEl.createDiv({ cls: "mini-meta" });
+    this.sidebarSourceEditor = SIDEBAR_SOURCE.createSidebarSourceEditor(sourceArea, {
+      t,
+      translate: text => this.translateSidebarText(text),
+      showResult: ({ pairs, via }) => {
+        this.show(pairs, providerName(via), true);
+        void this.plugin.pushHistory(pairs, via, "", null);
+      },
+      onModeChange: (editing, hasResult) => {
+        const showResult = !editing && hasResult;
+        this.flowEl.hidden = !showResult;
+        this.metaEl.hidden = !showResult;
+        this.copyBtn.hidden = !showResult;
+      },
+    });
 
     // 翻译历史：默认收起（不常驻），点时钟小图标展开；
     // 条目显示 时间·翻译源，文件/页码藏在详情小图标里
@@ -4970,29 +4987,27 @@ class MiniTranslatorView extends ItemView {
     this.histListEl = this.contentEl.createDiv({ cls: "mini-hist-list" });
     this.refreshHistoryCount();
 
-    this.emptyEl = this.contentEl.createDiv({
-      cls: "mini-empty",
-      text: t("panel.placeholder"),
-    });
-    this.showPlaceholder();
     // 面板刚打开也走一次全量重建：否则下拉里只有内置引擎，大模型源要等下一次同步才出现
     this.syncSource();
     // 订阅中枢：设置页/管理弹窗改了任何源、模型或选中状态，这里立即实时重建
     this.unsubSources = onSourcesSync(() => this.syncSource());
   }
-  showPlaceholder() {
-    this.flowEl.hide();
-    this.metaEl.hide();
-    this.copyBtn.hide();
-    this.emptyEl.show();
-    this.lastResult = "";
+  async translateSidebarText(text) {
+    const { sourceLanguage, targetLanguage, primarySource } = this.plugin.settings;
+    const from = safeLanguageCode(sourceLanguage, true);
+    const to = safeLanguageCode(targetLanguage);
+    const result = await translateSentence(text, primarySource, from, to);
+    return { via: result.via, pairs: [{
+      en: text, zh: formatTextForLanguage(result.text, to),
+      sourceLanguage: from, targetLanguage: to, detectedLanguage: result.detectedLanguage,
+    }] };
   }
-  show(pairs, meta) {
-    this.emptyEl.hide();
-    this.flowEl.show();
-    this.metaEl.show();
-    this.copyBtn.show();
+
+  show(pairs, meta, manual = false) {
+    // Never replace an in-progress manual draft with an incidental popup result.
+    if (!manual && this.sidebarSourceEditor && !this.sidebarSourceEditor.canAcceptExternal()) return false;
     renderPairsTo(this.flowEl, pairs);
+    this.sidebarSourceEditor?.accept(pairs);
     TYPOGRAPHY.applyTypography(this.flowEl, this.plugin.settings, "sidebar");
     const from = pairs[0]?.sourceLanguage || this.plugin.settings.sourceLanguage;
     const to = pairs[0]?.targetLanguage || this.plugin.settings.targetLanguage;
@@ -5128,15 +5143,17 @@ class MiniTranslatorView extends ItemView {
         this.renderHistory();
       };
       item.onclick = () => {
-        this.show(
+        const shown = this.show(
           h.pairs,
           t("panel.history_meta", { source: providerName(h.via) })
         );
-        new Notice(t("panel.history_loaded"), 1200);
+        new Notice(t(shown === false ? "panel.finish_edit" : "panel.history_loaded"), 1800);
       };
     }
   }
   onClose() {
+    this.sidebarSourceEditor?.destroy();
+    this.sidebarSourceEditor = null;
     // 面板关闭即退订，避免监听器堆积指向已销毁的 DOM
     this.sourceDropdown?.close();
     this.dictDropdown?.close();
@@ -6040,6 +6057,7 @@ module.exports = class MiniTranslator extends Plugin {
   }
 
   onSelectionChanged() {
+    if (document.activeElement?.closest?.(".mini-sidebar-source-editor")) return;
     const sel = window.getSelection();
     const t = ((sel && sel.toString()) || "").trim();
     if (!this.settings.autoTranslate) return;
