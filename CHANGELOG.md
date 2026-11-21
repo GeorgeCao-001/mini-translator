@@ -2,18 +2,18 @@
 
 All public changes to Mini Translator are recorded here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.5] - 2026-11-21
 
 ### Added
 
 - Added a sidebar settings shortcut and a source jump in translation history. PDF entries reopen the saved selection or fall back to the page; Markdown entries scroll to the recorded or uniquely matched text when possible.
-- Added editable sidebar source text, manual submit and retranslation without changing the selection popup flow.
+- Added in-place sidebar source editing with a live-growing editor, compact edit/copy controls, Enter to translate, and Shift+Enter to start a paragraph. Manual paragraph breaks survive translation, display, history, and copying.
 - Added compact up/down navigation for the five most recent prior popup results, with history labels, one-click return and a command to reopen history after dismissal. Reuses existing translation history without new requests or settings.
 - LLM, Azure/Bing and CNKI credentials keep the plaintext default and can opt in to Obsidian Keychain Secure mode individually. DeepL remains Keychain-only.
 - Added DeepL official text translation through the existing provider/configuration UI, using user-owned Obsidian Keychain secrets instead of plaintext API keys. Free/Pro routing, language mapping, formula protection and localized API errors are included; fallback billing is opt-in and directly selected DeepL never silently switches services. PDF full translation remains LLM-only. No new dependencies.
 ### Fixed
 
-- Use the basic `text-decoration` shorthand for source/target typography, preserving underline, strike-through and reset behavior while removing the two CSS3 longhand compatibility warnings. Add release-pattern checks and genuine-browser coverage for all popup/sidebar roles and decoration modes.
+- Replaced the two advanced typography `text-decoration-line` declarations with the simple `text-decoration` form, keeping underline and strike-through. The release check covers both the decoration and multicolumn warning patterns.
 
 ## [1.0.4] - 2026-11-08
 

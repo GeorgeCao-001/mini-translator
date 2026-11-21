@@ -56,3 +56,7 @@
 ## 2026-11-20 - Paragraph shortcut Vault sync
 
 - Synced the checked build with Shift+Enter starting a paragraph and existing indentation restored for manually edited translations. Verified all installed asset hashes and unchanged data.json. Backed up prior assets in the system temporary directory as mini-translator-before-paragraph-shortcut-sync-3876faef. No reload, commit, push or release.
+
+## 2026-11-21 - 1.0.5 release preparation
+
+- Prepared the version metadata and bilingual release notes. The old CSS warning patterns are checked in the built assets. Documented local file enumeration and write-only clipboard behavior. The preview directory and Vault data are excluded.

@@ -127,6 +127,8 @@ Mini Translator has no author-operated proxy, analytics, or client-side telemetr
 | Full-PDF translation | Extracted PDF text blocks are sent to the selected LLM endpoint. The original PDF and page images are not uploaded as vision input. |
 | Comparison HTML | The browser requests MathJax from jsDelivr when the generated HTML file is opened. |
 
+The PDF picker and older history entries without a saved path use Obsidian’s local file index to find candidates. Enumeration does not send file names or paths to a translation service. Copy actions write the selected text or translation to the clipboard and do not read it.
+
 Plugin settings, plaintext credentials and up to 50 translation-history entries are stored **unencrypted** below. LLM, Azure/Bing and CNKI default to plaintext; use **Secure mode** in their credential settings to select a Keychain secret. After saving, only the secret name remains in that configuration. DeepL always uses Keychain. Switching back requires re-entering the key. Old backups can still contain plaintext, and model exports still include keys for plaintext profiles (but not protected keys or their references):
 
 ```text
